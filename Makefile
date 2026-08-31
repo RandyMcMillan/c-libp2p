@@ -14,13 +14,18 @@ endif
 
 
 OBJS = $(shell (find $(COMPONENTS) -name *.o))
+LINKER_FLAGS = c-multiaddr/libmultiaddr.a c-multihash/libmultihash.a c-protobuf/protobuf.o c-protobuf/varint.o
 
 all: test
 
 link: compile
 	$(AR) rcs libp2p.a $(OBJS) $(LINKER_FLAGS)
 #ifdef SHARED
+ifeq ($(shell uname -s),Darwin)
+	gcc -dynamiclib -o libp2p.dylib $(OBJS) $(LINKER_FLAGS)
+else
 	gcc -shared -o libp2p.so $(OBJS) $(LINKER_FLAGS)
+endif
 #endif
 
 compile:
