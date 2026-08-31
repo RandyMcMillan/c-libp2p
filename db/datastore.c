@@ -46,6 +46,10 @@ int libp2p_datastore_new(struct Datastore** datastore) {
 	(*datastore)->storage_max = NULL;
 	(*datastore)->gc_period = NULL;
 	(*datastore)->params = NULL;
+	(*datastore)->storage_gc_watermark = 90;
+	(*datastore)->no_sync = 0;
+	(*datastore)->hash_on_read = 0;
+	(*datastore)->bloom_filter_size = 0;
 	return 1;
 }
 
