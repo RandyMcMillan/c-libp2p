@@ -105,9 +105,9 @@ libmbedtls.so: libmbedtls.$(SOEXT_TLS)
 	echo "  LN    $@ -> $<"
 	ln -sf $< $@
 
-libmbedtls.dylib: $(OBJS_TLS)
+libmbedtls.dylib: $(OBJS_TLS) libmbedx509.dylib
 	echo "  LD    $@"
-	$(CC) -dynamiclib $(LOCAL_LDFLAGS) $(LDFLAGS) -o $@ $(OBJS_TLS)
+	$(CC) -dynamiclib -Wl,-install_name,$@ -L. -lmbedcrypto -lmbedx509 $(LOCAL_LDFLAGS) $(LDFLAGS) -o $@ $(OBJS_TLS)
 
 libmbedtls.dll: $(OBJS_TLS) libmbedx509.dll
 	echo "  LD    $@"
@@ -128,9 +128,9 @@ libmbedx509.so: libmbedx509.$(SOEXT_X509)
 	echo "  LN    $@ -> $<"
 	ln -sf $< $@
 
-libmbedx509.dylib: $(OBJS_X509)
+libmbedx509.dylib: $(OBJS_X509) libmbedcrypto.dylib
 	echo "  LD    $@"
-	$(CC) -dynamiclib $(LOCAL_LDFLAGS) $(LDFLAGS) -o $@ $(OBJS_X509)
+	$(CC) -dynamiclib -Wl,-install_name,$@ -L. -lmbedcrypto $(LOCAL_LDFLAGS) $(LDFLAGS) -o $@ $(OBJS_X509)
 
 libmbedx509.dll: $(OBJS_X509) libmbedcrypto.dll
 	echo "  LD    $@"
@@ -153,7 +153,7 @@ libmbedcrypto.so: libmbedcrypto.$(SOEXT_CRYPTO)
 
 libmbedcrypto.dylib: $(OBJS_CRYPTO)
 	echo "  LD    $@"
-	$(CC) -dynamiclib $(LOCAL_LDFLAGS) $(LDFLAGS) -o $@ $(OBJS_CRYPTO)
+	$(CC) -dynamiclib -Wl,-install_name,$@ $(LOCAL_LDFLAGS) $(LDFLAGS) -o $@ $(OBJS_CRYPTO)
 
 libmbedcrypto.dll: $(OBJS_CRYPTO)
 	echo "  LD    $@"
