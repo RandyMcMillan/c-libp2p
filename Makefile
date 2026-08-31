@@ -22,7 +22,7 @@ link: compile
 	$(AR) rcs libp2p.a $(OBJS) $(LINKER_FLAGS)
 #ifdef SHARED
 ifeq ($(shell uname -s),Darwin)
-	gcc -dynamiclib -o libp2p.dylib $(OBJS) $(LINKER_FLAGS)
+	gcc -dynamiclib -Wl,-install_name,@rpath/libp2p.dylib -o libp2p.dylib $(OBJS) $(LINKER_FLAGS)
 else
 	gcc -shared -o libp2p.so $(OBJS) $(LINKER_FLAGS)
 endif
