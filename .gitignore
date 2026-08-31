@@ -10,3 +10,8 @@
 test/testit_libp2p
 cscope.files
 cscope.out
+
+libp2p.dylib
+thirdparty/mbedtls/libmbedcrypto.dylib
+thirdparty/mbedtls/libmbedtls.dylib
+thirdparty/mbedtls/libmbedx509.dylib
