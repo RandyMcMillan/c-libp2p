@@ -37,7 +37,9 @@ SOEXT_CRYPTO=so.0
 
 DLEXT=so
 # OSX shared library extension:
-# DLEXT=dylib
+ifeq ($(shell uname -s),Darwin)
+DLEXT=dylib
+endif
 
 # Windows shared library extension:
 ifdef WINDOWS_BUILD
