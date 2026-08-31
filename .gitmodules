@@ -1,9 +1,9 @@
 [submodule "c-multiaddr"]
 	path = c-multiaddr
-	url = git@github.com:RandyMcMillan/c-multiaddr.git
+	url = https://github.com/RandyMcMillan/c-multiaddr.git
 [submodule "c-multihash"]
 	path = c-multihash
-	url = git@github.com:RandyMcMillan/c-multihash.git
+	url = https://github.com/RandyMcMillan/c-multihash.git
 [submodule "c-protobuf"]
 	path = c-protobuf
-	url = git@github.com:RandyMcMillan/c-protobuf.git
+	url = https://github.com/RandyMcMillan/c-protobuf.git
