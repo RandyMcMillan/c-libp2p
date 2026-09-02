@@ -1,6 +1,6 @@
 DHT_DIR = dht
 DEPS = # $(DHT_DIR)/dht.h
-OBJS = kademlia.o dht.o dht_protocol.o
+OBJS = kademlia.o dht.o dht_protocol.o dht_utils.o
 
 %.o: %.c $(DEPS)
 	$(CC) -c -o $@ $< $(CFLAGS) -I$(DHT_DIR) 

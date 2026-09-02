@@ -5,6 +5,7 @@
 #include "libp2p/net/stream.h"
 #include "libp2p/os/utils.h"
 #include "libp2p/routing/dht_protocol.h"
+#include "libp2p/routing/dht_utils.h"
 #include "libp2p/record/message.h"
 #include "libp2p/utils/linked_list.h"
 #include "libp2p/utils/logger.h"
@@ -71,6 +72,37 @@ int libp2p_routing_dht_protobuf_message(struct KademliaMessage* message, unsigne
 		return 0;
 	}
 	return 1;
+}
+
+/**
+ * Add up to N closest peers from the peerstore to the message's closer_peer_head.
+ * @param message the message to populate
+ * @param peerstore the peerstore to search
+ * @param target_key the key to measure distance from
+ * @param target_key_size the size of the key
+ * @param num_results max number of closer peers to add
+ */
+static void libp2p_routing_dht_add_closer_peers(struct KademliaMessage* message, struct Peerstore* peerstore,
+		const unsigned char* target_key, size_t target_key_size, int num_results) {
+	struct Libp2pPeer** closest = (struct Libp2pPeer**)calloc(num_results, sizeof(struct Libp2pPeer*));
+	if (closest == NULL)
+		return;
+	int found = libp2p_routing_dht_find_closest_peers(peerstore, target_key, target_key_size, num_results, closest);
+	for (int i = 0; i < found; i++) {
+		struct Libp2pLinkedList* new_node = libp2p_utils_linked_list_new();
+		if (new_node != NULL) {
+			new_node->item = libp2p_peer_copy(closest[i]);
+			if (message->closer_peer_head == NULL) {
+				message->closer_peer_head = new_node;
+			} else {
+				struct Libp2pLinkedList* current = message->closer_peer_head;
+				while (current->next != NULL)
+					current = current->next;
+				current->next = new_node;
+			}
+		}
+	}
+	free(closest);
 }
 
 /**
@@ -149,6 +181,7 @@ int libp2p_routing_dht_handle_get_providers(struct Stream* stream, struct Kademl
 
 	// This shouldn't be needed, but just in case:
 	message->provider_peer_head = NULL;
+	message->closer_peer_head = NULL;
 
 	// Can I provide it locally?
 	struct DatastoreRecord* datastore_record = NULL;
@@ -177,7 +210,7 @@ int libp2p_routing_dht_handle_get_providers(struct Stream* stream, struct Kademl
 				}
 				// add to the list
 				current->next = libp2p_utils_linked_list_new();
-				current->next->item = peer;
+				current->next->item = libp2p_peer_copy(peer);
 			}
 		}
 	} else {
@@ -192,20 +225,14 @@ int libp2p_routing_dht_handle_get_providers(struct Stream* stream, struct Kademl
 	}
 	if (peer_id != NULL)
 		free(peer_id);
-	// TODO: find closer peers
-	/*
-	if (message->provider_peer_head == NULL) {
-		// Who else can provide it?
-		//while ()
-	}
-	*/
-	if (message->provider_peer_head != NULL) {
-		libp2p_logger_debug("dht_protocol", "GetProviders: We have a peer. Sending it back.");
-		// protobuf it and send it back
-		if (!libp2p_routing_dht_protobuf_message(message, results, results_size)) {
-			libp2p_logger_error("dht_protocol", "GetProviders: Error protobufing results\n");
-			return 0;
-		}
+
+	// Always return closer peers so the caller can continue its iterative lookup
+	libp2p_routing_dht_add_closer_peers(message, protocol_context->peer_store, (unsigned char*)message->key, message->key_size, 3);
+
+	// protobuf it and send it back (even if empty, to complete the request)
+	if (!libp2p_routing_dht_protobuf_message(message, results, results_size)) {
+		libp2p_logger_error("dht_protocol", "GetProviders: Error protobufing results\n");
+		return 0;
 	}
 	return 1;
 }
@@ -423,17 +450,22 @@ int libp2p_routing_dht_handle_put_value(struct Stream* stream, struct KademliaMe
  */
 int libp2p_routing_dht_handle_find_node(struct Stream* stream, struct KademliaMessage* message,
 		struct DhtContext* protocol_context, unsigned char** result_buffer, size_t *result_buffer_size) {
+	message->provider_peer_head = NULL;
+	message->closer_peer_head = NULL;
+
 	// look through peer store
 	struct Libp2pPeer* peer = libp2p_peerstore_get_peer(protocol_context->peer_store, (unsigned char*)message->key, message->key_size);
 	if (peer != NULL) {
 		message->provider_peer_head = libp2p_utils_linked_list_new();
 		message->provider_peer_head->item = libp2p_peer_copy(peer);
-		if (!libp2p_routing_dht_protobuf_message(message, result_buffer, result_buffer_size)) {
-			return 0;
-		}
-		return 1;
+	} else {
+		// return closer peers to help the caller continue its search
+		libp2p_routing_dht_add_closer_peers(message, protocol_context->peer_store, (unsigned char*)message->key, message->key_size, 3);
 	}
-	return 0;
+	if (!libp2p_routing_dht_protobuf_message(message, result_buffer, result_buffer_size)) {
+		return 0;
+	}
+	return 1;
 }
 
 /***
@@ -573,27 +605,22 @@ int libp2p_routing_dht_send_message(struct SessionContext* sessionContext, struc
  */
 int libp2p_routing_dht_send_message_nearest_x(const struct Dialer* dialer, struct Peerstore* peerstore,
 		struct Datastore* datastore, struct KademliaMessage* msg, int numToSend) {
-	// TODO: Calculate "Nearest"
-	// but for now, grab x peers, and send to them
+	struct Libp2pPeer** nearest = (struct Libp2pPeer**)calloc(numToSend, sizeof(struct Libp2pPeer*));
+	if (nearest == NULL)
+		return 0;
+	int found = libp2p_routing_dht_find_closest_peers(peerstore, (unsigned char*)msg->key, msg->key_size, numToSend, nearest);
 	int numSent = 0;
-	struct Libp2pLinkedList* llpeer_entry = peerstore->head_entry;
-	while (llpeer_entry != NULL) {
-		struct PeerEntry* entry = llpeer_entry->item;
-		if (entry == NULL)
-			break;
-		struct Libp2pPeer* remote_peer = entry->peer;
-		if (!remote_peer->is_local) {
-			// connect (if not connected)
-			if (libp2p_peer_connect(dialer, remote_peer, peerstore, datastore, 5)) {
-				// send message
-				if (libp2p_routing_dht_send_message(remote_peer->sessionContext, msg))
-					numSent++;
-			}
-			if (numSent >= numToSend)
-				break;
+	for (int i = 0; i < found; i++) {
+		struct Libp2pPeer* remote_peer = nearest[i];
+		if (remote_peer == NULL || remote_peer->is_local)
+			continue;
+		// connect (if not connected)
+		if (libp2p_peer_connect(dialer, remote_peer, peerstore, datastore, 5)) {
+			// send message
+			if (libp2p_routing_dht_send_message(remote_peer->sessionContext, msg))
+				numSent++;
 		}
-		// grab next entry
-		llpeer_entry = llpeer_entry->next;
 	}
+	free(nearest);
 	return numSent > 0;
 }
