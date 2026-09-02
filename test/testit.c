@@ -213,5 +213,5 @@ int main(int argc, char** argv) {
 	fclose(stdin);
 	fclose(stdout);
 	fclose(stderr);
-	return 1;
+	return counter == 0 ? 0 : 1;
 }
