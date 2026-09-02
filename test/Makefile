@@ -8,6 +8,8 @@ endif
 LFLAGS = -L../ -L../c-multihash -L../c-multiaddr
 ifeq ($(shell uname -s),Darwin)
 LFLAGS += -Wl,-rpath,@loader_path/..
+else
+LFLAGS += -Wl,-rpath,'$$ORIGIN/..'
 endif
 DEPS = crypto/test_base58.h crypto/test_rsa.h test_mbedtls.h
 OBJS = testit.o ../c-protobuf/protobuf.o ../c-protobuf/varint.o ../libp2p.a

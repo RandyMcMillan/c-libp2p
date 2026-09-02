@@ -12,10 +12,7 @@ jobs:
       fail-fast: false
       matrix:
         os:
-          - ubuntu-20.04
-          - ubuntu-22.04
           - ubuntu-latest
-          - macos-13
           - macos-latest
     runs-on: ${{ matrix.os }}
     steps:
@@ -37,4 +34,9 @@ jobs:
         run: make all
 
       - name: Run smoke tests
-        run: ./test/testit_libp2p test_public_der_to_private_der test_mbedtls_varint_128_string test_crypto_rsa_private_key_der test_crypto_rsa_signing test_crypto_rsa_public_key_to_peer_id test_crypto_x509_der_to_private2 test_crypto_x509_der_to_private test_crypto_hashing_sha256 test_base58_encode_decode test_base58_size test_base58_max_size test_base58_peer_address test_crypto_encoding_base32_encode
+        run: |
+          if [ "$(uname -s)" = "Linux" ]; then
+            cd test && LD_LIBRARY_PATH=.. ./testit_libp2p test_public_der_to_private_der test_mbedtls_varint_128_string test_crypto_rsa_private_key_der test_crypto_rsa_signing test_crypto_rsa_public_key_to_peer_id test_crypto_x509_der_to_private2 test_crypto_x509_der_to_private test_crypto_hashing_sha256 test_base58_encode_decode test_base58_size test_base58_max_size test_base58_peer_address test_crypto_encoding_base32_encode
+          else
+            ./test/testit_libp2p test_public_der_to_private_der test_mbedtls_varint_128_string test_crypto_rsa_private_key_der test_crypto_rsa_signing test_crypto_rsa_public_key_to_peer_id test_crypto_x509_der_to_private2 test_crypto_x509_der_to_private test_crypto_hashing_sha256 test_base58_encode_decode test_base58_size test_base58_max_size test_base58_peer_address test_crypto_encoding_base32_encode
+          fi
