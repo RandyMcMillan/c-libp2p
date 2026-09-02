@@ -28,7 +28,13 @@ else
 endif
 #endif
 
-compile:
+prepare:
+	@if [ "$$(uname -s)" = "Darwin" ] && find $(SUBMODULES) $(COMPONENTS) -name '*.o' -exec file {} + 2>/dev/null | grep -vq 'Mach-O'; then \
+		echo "  CLEAN stale non-Mach-O objects"; \
+		$(MAKE) clean; \
+	fi
+
+compile: prepare
 	$(foreach dir,$(SUBMODULES), $(MAKE) -C $(dir) all ;)
 	$(foreach dir,$(COMPONENTS), $(MAKE) -C $(dir) all ;)
 

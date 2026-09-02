@@ -7,4 +7,4 @@ OBJS = utils.o memstream.o
 all: $(OBJS)
 
 clean:
-	rm -f $(OBJS)
+	rm -f $(OBJS) timespec.o
