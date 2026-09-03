@@ -106,7 +106,10 @@ static void* discovery_worker(void* arg) {
 			libp2p_logger_debug("discovery", "Relay hints available: %d\n", discovery->relay_hints->total);
 		}
 #endif
-		sleep(discovery->config.mdns_interval > 0 ? discovery->config.mdns_interval : 1);
+		int interval = discovery->config.mdns_interval > 0 ? discovery->config.mdns_interval : 1;
+		for (int i = 0; i < interval && discovery->running; i++) {
+			sleep(1);
+		}
 	}
 	return NULL;
 }
