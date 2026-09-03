@@ -3,6 +3,7 @@
 #include <pthread.h>
 
 #include "libp2p/net/stream.h"
+#include "libp2p/net/mdns.h"
 #include "libp2p/utils/vector.h"
 
 typedef struct {
@@ -18,6 +19,9 @@ struct Libp2pDiscovery {
 	libp2p_discovery_config_t config;
 	struct Libp2pVector* relay_hints;
 	struct Libp2pVector* observed_addresses;
+	mdns_service_t* mdns;
+	char* peer_id;
+	char* local_multiaddr;
 	pthread_t worker;
 	int worker_started;
 	volatile int running;
@@ -32,3 +36,4 @@ int libp2p_discovery_add_relay_hint(struct Libp2pDiscovery* discovery, const cha
 int libp2p_discovery_record_observed_address(struct Libp2pDiscovery* discovery, const char* multiaddr);
 int libp2p_discovery_should_hole_punch(struct Libp2pDiscovery* discovery, const char* multiaddr);
 int libp2p_discovery_is_private_address(const char* multiaddr);
+int libp2p_discovery_set_identity(struct Libp2pDiscovery* discovery, const char* peer_id, const char* multiaddr);

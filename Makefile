@@ -1,5 +1,5 @@
 SUBMODULES = c-multiaddr c-multihash c-protobuf
-COMPONENTS = conn crypto db discovery thirdparty hashmap identify net os peer record routing secio swarm transport utils yamux mplex
+COMPONENTS = autonat conn crypto db discovery thirdparty hashmap identify net os peer record routing secio swarm transport utils yamux mplex
 
 export DEBUG = true
 export SHARED = true
