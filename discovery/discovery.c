@@ -5,6 +5,7 @@
 
 #include "libp2p/discovery/discovery.h"
 #include "libp2p/utils/logger.h"
+#include "libp2p/utils/logger.h"
 
 static char* discovery_strdup(const char* value) {
 	if (value == NULL) {
@@ -97,6 +98,14 @@ static void* discovery_worker(void* arg) {
 		if (discovery->config.relay_enabled && discovery->relay_hints != NULL && discovery->relay_hints->total > 0) {
 			libp2p_logger_debug("discovery", "Relay hints available: %d\n", discovery->relay_hints->total);
 		}
+#ifdef DEBUG
+		if (discovery->config.mdns_enabled) {
+			libp2p_logger_debug("discovery", "mDNS discovery tick (interval %d).\n", discovery->config.mdns_interval);
+		}
+		if (discovery->config.relay_enabled && discovery->relay_hints != NULL && discovery->relay_hints->total > 0) {
+			libp2p_logger_debug("discovery", "Relay hints available: %d\n", discovery->relay_hints->total);
+		}
+#endif
 		sleep(discovery->config.mdns_interval > 0 ? discovery->config.mdns_interval : 1);
 	}
 	return NULL;
