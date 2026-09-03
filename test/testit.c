@@ -11,6 +11,7 @@
 #include "test_mbedtls.h"
 #include "test_multistream.h"
 #include "test_mplex.h"
+#include "test_discovery.h"
 #include "test_conn.h"
 #include "test_record.h"
 #include "test_peer.h"
@@ -104,6 +105,9 @@ int build_test_collection() {
 	add_test("test_multistream_get_list", test_multistream_get_list,1);
 	add_test("test_mplex_protocol_handler", test_mplex_protocol_handler,1);
 	add_test("test_mplex_stream_new", test_mplex_stream_new,1);
+	add_test("test_discovery_new_free", test_discovery_new_free,1);
+	add_test("test_discovery_private_address_classification", test_discovery_private_address_classification,1);
+	add_test("test_discovery_hole_punch_hint", test_discovery_hole_punch_hint,1);
 	add_test("test_ephemeral_key_generate", test_ephemeral_key_generate,1);
 	add_test("test_ephemeral_key_sign", test_ephemeral_key_sign,1);
 	add_test("test_dialer_new", test_dialer_new,1);
