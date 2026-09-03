@@ -10,6 +10,7 @@
 #include "test_secio.h"
 #include "test_mbedtls.h"
 #include "test_multistream.h"
+#include "test_mplex.h"
 #include "test_conn.h"
 #include "test_record.h"
 #include "test_peer.h"
@@ -101,6 +102,8 @@ int build_test_collection() {
 	add_test("test_secio_encrypt_like_go", test_secio_encrypt_like_go,1);
 	add_test("test_multistream_connect", test_multistream_connect,1);
 	add_test("test_multistream_get_list", test_multistream_get_list,1);
+	add_test("test_mplex_protocol_handler", test_mplex_protocol_handler,1);
+	add_test("test_mplex_stream_new", test_mplex_stream_new,1);
 	add_test("test_ephemeral_key_generate", test_ephemeral_key_generate,1);
 	add_test("test_ephemeral_key_sign", test_ephemeral_key_sign,1);
 	add_test("test_dialer_new", test_dialer_new,1);

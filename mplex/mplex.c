@@ -4,7 +4,6 @@
 
 #include "varint.h"
 #include "libp2p/mplex/mplex.h"
-#include "libp2p/net/connectionstream.h"
 #include "libp2p/utils/logger.h"
 
 int libp2p_mplex_can_handle(const struct StreamMessage* msg) {
@@ -43,30 +42,11 @@ int libp2p_mplex_receive_protocol(struct Stream* stream) {
 	return retVal;
 }
 
-static ssize_t libp2p_mplex_read_passthrough(libp2p_stream_t *stream, uint8_t *buf, size_t len) {
-	struct Stream *parent = (struct Stream*)stream->user_data;
-	if (parent == NULL || parent->read_raw == NULL) {
-		return -1;
-	}
-	return parent->read_raw(parent->stream_context, buf, (int)len, 30);
-}
-
-static ssize_t libp2p_mplex_write_passthrough(libp2p_stream_t *stream, const uint8_t *buf, size_t len) {
-	struct Stream *parent = (struct Stream*)stream->user_data;
-	if (parent == NULL || parent->write == NULL) {
-		return -1;
-	}
-	struct StreamMessage msg;
-	msg.data = (uint8_t*)buf;
-	msg.data_size = len;
-	return parent->write(parent->stream_context, &msg) ? (ssize_t)len : -1;
-}
-
-static void libp2p_mplex_stream_close(libp2p_stream_t *stream) {
-	struct Stream *parent = (struct Stream*)stream->user_data;
-	free(stream);
-	(void)parent;
-}
+static int libp2p_mplex_close(struct Stream* stream);
+static int libp2p_mplex_peek(void* stream_context);
+static int libp2p_mplex_read(void* stream_context, struct StreamMessage** results, int timeout_secs);
+static int libp2p_mplex_read_raw(void* stream_context, uint8_t* buffer, int buffer_len, int timeout_secs);
+static int libp2p_mplex_write(void* stream_context, struct StreamMessage* msg);
 
 int libp2p_mplex_handle_message(const struct StreamMessage* msg, struct Stream* stream, void* protocol_context) {
 	(void)msg;
@@ -83,6 +63,50 @@ int libp2p_mplex_shutdown(void* protocol_context) {
 		free(protocol_context);
 	}
 	return 1;
+}
+
+static int libp2p_mplex_close(struct Stream* stream) {
+	if (stream == NULL) {
+		return 0;
+	}
+	struct MplexContext* ctx = (struct MplexContext*)stream->stream_context;
+	if (ctx != NULL) {
+		free(ctx);
+	}
+	free(stream);
+	return 1;
+}
+
+static int libp2p_mplex_peek(void* stream_context) {
+	struct MplexContext* ctx = (struct MplexContext*)stream_context;
+	if (ctx == NULL || ctx->stream == NULL || ctx->stream->parent_stream == NULL || ctx->stream->parent_stream->peek == NULL) {
+		return -1;
+	}
+	return ctx->stream->parent_stream->peek(ctx->stream->parent_stream->stream_context);
+}
+
+static int libp2p_mplex_read(void* stream_context, struct StreamMessage** results, int timeout_secs) {
+	struct MplexContext* ctx = (struct MplexContext*)stream_context;
+	if (ctx == NULL || ctx->stream == NULL || ctx->stream->parent_stream == NULL || ctx->stream->parent_stream->read == NULL) {
+		return 0;
+	}
+	return ctx->stream->parent_stream->read(ctx->stream->parent_stream->stream_context, results, timeout_secs);
+}
+
+static int libp2p_mplex_read_raw(void* stream_context, uint8_t* buffer, int buffer_len, int timeout_secs) {
+	struct MplexContext* ctx = (struct MplexContext*)stream_context;
+	if (ctx == NULL || ctx->stream == NULL || ctx->stream->parent_stream == NULL || ctx->stream->parent_stream->read_raw == NULL) {
+		return -1;
+	}
+	return ctx->stream->parent_stream->read_raw(ctx->stream->parent_stream->stream_context, buffer, buffer_len, timeout_secs);
+}
+
+static int libp2p_mplex_write(void* stream_context, struct StreamMessage* msg) {
+	struct MplexContext* ctx = (struct MplexContext*)stream_context;
+	if (ctx == NULL || ctx->stream == NULL || ctx->stream->parent_stream == NULL || ctx->stream->parent_stream->write == NULL) {
+		return 0;
+	}
+	return ctx->stream->parent_stream->write(ctx->stream->parent_stream->stream_context, msg);
 }
 
 struct Stream* libp2p_mplex_stream_new(struct Stream* parent_stream, int theyRequested) {
@@ -112,24 +136,19 @@ struct Stream* libp2p_mplex_stream_new(struct Stream* parent_stream, int theyReq
 		ctx->protocol_handlers = NULL;
 		ctx->status = mplex_status_initialized;
 		out->stream_context = ctx;
-
-		libp2p_stream_t *compat = (libp2p_stream_t*)calloc(1, sizeof(libp2p_stream_t));
-		if (compat == NULL) {
-			free(ctx);
-			libp2p_stream_free(out);
-			return NULL;
-		}
-		compat->read = libp2p_mplex_read_passthrough;
-		compat->write = libp2p_mplex_write_passthrough;
-		compat->close = libp2p_mplex_stream_close;
-		compat->user_data = parent_stream;
-		out->stream_context = ctx;
-		out->close = (int (*)(struct Stream*))libp2p_mplex_stream_free;
-		out->read = parent_stream->read;
-		out->read_raw = parent_stream->read_raw;
-		out->write = parent_stream->write;
+		out->close = libp2p_mplex_close;
+		out->read = libp2p_mplex_read;
+		out->read_raw = libp2p_mplex_read_raw;
+		out->write = libp2p_mplex_write;
+		out->peek = libp2p_mplex_peek;
+		out->address = parent_stream->address;
+		out->socket_mutex = parent_stream->socket_mutex;
+		out->channel = parent_stream->channel;
 		parent_stream->handle_upgrade(parent_stream, out);
 		if (!theyRequested) {
+			if (parent_stream->write != NULL) {
+				libp2p_mplex_send_protocol(parent_stream);
+			}
 			ctx->status = mplex_status_syn;
 		} else {
 			ctx->status = mplex_status_ack;
