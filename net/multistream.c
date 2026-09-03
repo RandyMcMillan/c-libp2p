@@ -321,9 +321,9 @@ struct Stream* libp2p_net_multistream_connect(const char* hostname, int port) {
  * @returns the socket file descriptor of the connection, or -1 on error
  */
 struct Stream* libp2p_net_multistream_connect_with_timeout(const char* hostname, int port, int timeout_secs) {
-	int retVal = -1, return_result = -1, socket = -1;
-	struct StreamMessage* results = NULL;
+	int socket = -1;
 	struct Stream* stream = NULL;
+	struct Stream* multistream = NULL;
 
 	uint32_t ip = hostname_to_ip(hostname);
 	socket = socket_open4();
@@ -337,35 +337,18 @@ struct Stream* libp2p_net_multistream_connect_with_timeout(const char* hostname,
 	if (stream == NULL)
 		goto exit;
 
-	struct SessionContext session;
-	session.insecure_stream = stream;
-	session.secure_stream = NULL;
-	session.default_stream = stream;
-
-	// try to receive the protocol id
-	return_result = libp2p_net_multistream_read(&session, &results, timeout_secs);
-	if (results == NULL || return_result == 0 || results->data_size < 1 || !libp2p_net_multistream_can_handle(results)) {
-		libp2p_logger_error("multistream", "Attempted to receive the multistream protocol header, but received %s.\n", results);
-		goto exit;
-	}
-
-	if (!libp2p_net_multistream_send_protocol(&session)) {
-		libp2p_logger_error("multistream", "Attempted to send the multistream protocol header, but could not.\n");
-		goto exit;
-	}
-
-	// we are now in the loop, so we can switch to another protocol (i.e. /secio/1.0.0)
-
-	retVal = socket;
-	exit:
-	if (results != NULL)
-		free(results);
-	if (retVal < 0 && stream != NULL) {
-		stream->close(stream);
+	// Negotiate multistream on top of the raw connection.
+	multistream = libp2p_net_multistream_stream_new(stream, 0);
+	if (multistream == NULL) {
 		libp2p_stream_free(stream);
 		stream = NULL;
+		goto exit;
 	}
-	if (retVal < 0 && socket > 0)
+
+	stream = multistream;
+
+exit:
+	if (stream == NULL && socket > 0)
 		close(socket);
 	return stream;
 }

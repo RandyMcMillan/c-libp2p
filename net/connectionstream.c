@@ -259,7 +259,9 @@ int libp2p_net_connection_upgrade(struct Stream* parent_stream, struct Stream* n
 		current_stream = current_stream->parent_stream;
 	// current_stream is now the root, and should have a ConnectionContext
 	struct ConnectionContext* ctx = (struct ConnectionContext*)current_stream->stream_context;
-	ctx->session_context->default_stream = new_stream;
+	if (ctx != NULL && ctx->session_context != NULL) {
+		ctx->session_context->default_stream = new_stream;
+	}
 	return 1;
 }
 
