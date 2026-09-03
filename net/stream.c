@@ -75,6 +75,11 @@ struct Stream* libp2p_stream_get_latest_stream(struct Stream* in) {
 		struct YamuxChannelContext* ctx = libp2p_yamux_get_channel_context(in->stream_context);
 		if (ctx != NULL)
 			return ctx->child_stream;
+	} else if (in->stream_type == STREAM_TYPE_MPLEX) {
+		struct Stream* current = in;
+		while (current->parent_stream != NULL)
+			current = current->parent_stream;
+		return current;
 	}
 	return libp2p_stream_get_latest_stream(in->parent_stream);
 }
