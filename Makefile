@@ -14,7 +14,7 @@ endif
 
 
 OBJS = $(shell (find $(COMPONENTS) -name *.o))
-LINKER_FLAGS = c-multiaddr/libmultiaddr.a c-multihash/libmultihash.a c-protobuf/protobuf.o c-protobuf/varint.o
+LINKER_FLAGS = $(ROOT)/c-multiaddr/libmultiaddr.a $(ROOT)/c-multihash/libmultihash.a $(ROOT)/c-protobuf/protobuf.o $(ROOT)/c-protobuf/varint.o
 
 all: test
 
@@ -29,8 +29,12 @@ endif
 #endif
 
 prepare:
-	@if [ "$$(uname -s)" = "Darwin" ] && find $(SUBMODULES) $(COMPONENTS) -name '*.o' -exec file {} + 2>/dev/null | grep -vq 'Mach-O'; then \
-		echo "  CLEAN stale non-Mach-O objects"; \
+	@case "$$(uname -s)" in \
+		Darwin) bad_fmt='Mach-O' ;; \
+		*) bad_fmt='ELF' ;; \
+	esac; \
+	if find $(SUBMODULES) $(COMPONENTS) -type f -name '*.o' -exec file {} + 2>/dev/null | grep -vq "$$bad_fmt"; then \
+		echo "  CLEAN stale foreign objects"; \
 		$(MAKE) clean; \
 	fi
 
