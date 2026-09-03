@@ -1,4 +1,5 @@
 #include <stdlib.h>
+#include <string.h>
 /**
  * Functions for handling the local dialer
  */
@@ -16,7 +17,7 @@
 #include "libp2p/yamux/yamux.h"
 #include "libp2p/identify/identify.h"
 
-struct TransportDialer* libp2p_conn_tcp_transport_dialer_new();
+struct TransportDialer* libp2p_conn_tcp_transport_dialer_new(char* peer_id, struct RsaPrivateKey* private_key);
 
 /**
  * Create a Dialer with the specified local information
@@ -31,15 +32,16 @@ struct Dialer* libp2p_conn_dialer_new(struct Libp2pPeer* peer, struct Peerstore*
 		dialer->peerstore = peerstore;
 		dialer->private_key = rsa_private_key;
 		dialer->transport_dialers = NULL;
-		dialer->fallback_dialer = libp2p_conn_tcp_transport_dialer_new(dialer->peer_id, rsa_private_key);
 		dialer->swarm = swarm;
+		dialer->peer_id = NULL;
 		if (peer != NULL) {
 			dialer->peer_id = malloc(peer->id_size + 1);
-			memset(dialer->peer_id, 0, peer->id_size + 1);
 			if (dialer->peer_id != NULL) {
+				memset(dialer->peer_id, 0, peer->id_size + 1);
 				strncpy(dialer->peer_id, peer->id, peer->id_size);
 			}
 		}
+		dialer->fallback_dialer = libp2p_conn_tcp_transport_dialer_new(dialer->peer_id, rsa_private_key);
 		return dialer;
 	}
 	libp2p_conn_dialer_free(dialer);
