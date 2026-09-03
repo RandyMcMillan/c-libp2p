@@ -108,6 +108,8 @@ int build_test_collection() {
 	add_test("test_discovery_new_free", test_discovery_new_free,1);
 	add_test("test_discovery_private_address_classification", test_discovery_private_address_classification,1);
 	add_test("test_discovery_hole_punch_hint", test_discovery_hole_punch_hint,1);
+	add_test("test_mdns_service_new", test_mdns_service_new,1);
+	add_test("test_autonat_encode_dial_response", test_autonat_encode_dial_response,1);
 	add_test("test_ephemeral_key_generate", test_ephemeral_key_generate,1);
 	add_test("test_ephemeral_key_sign", test_ephemeral_key_sign,1);
 	add_test("test_dialer_new", test_dialer_new,1);
