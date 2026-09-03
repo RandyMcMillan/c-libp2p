@@ -332,9 +332,8 @@ struct Stream* libp2p_net_multistream_connect_with_timeout(const char* hostname,
 	if (socket_connect4_with_timeout(socket, ip, port, timeout_secs) != 0)
 		goto exit;
 
-	// send the multistream handshake
-	// TODO: wire this back in
-	//stream = libp2p_net_multistream_stream_new(socket, hostname, port, NULL);
+	// wrap the raw connection in a Stream before negotiating multistream
+	stream = libp2p_net_connection_established(socket, (char*)hostname, port, NULL);
 	if (stream == NULL)
 		goto exit;
 
@@ -362,7 +361,8 @@ struct Stream* libp2p_net_multistream_connect_with_timeout(const char* hostname,
 	if (results != NULL)
 		free(results);
 	if (retVal < 0 && stream != NULL) {
-		libp2p_net_multistream_stream_free(stream);
+		stream->close(stream);
+		libp2p_stream_free(stream);
 		stream = NULL;
 	}
 	if (retVal < 0 && socket > 0)
@@ -582,4 +582,3 @@ struct Libp2pProtocolHandler* libp2p_net_multistream_build_protocol_handler(void
 	}
 	return handler;
 }
-
