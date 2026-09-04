@@ -8,6 +8,7 @@
 
 #include "libp2p/conn/noise.h"
 #include "libp2p/conn/multistream.h"
+#include "protobuf.h"
 #include "libp2p/peer/peerstore.h"
 #include "libp2p/utils/logger.h"
 
@@ -302,8 +303,114 @@ static void noise_mix_key(unsigned char* ck, unsigned char* k,
     memcpy(k, temp + NOISE_HASHLEN, NOISE_HASHLEN);
 }
 
-struct Stream* libp2p_noise_handshake(struct Stream* raw_stream, void* private_key, struct Libp2pPeer* peer) {
-    (void)private_key;
+/* Encode a libp2p NoiseHandshakePayload protobuf:
+ *   message NoiseHandshakePayload {
+ *     bytes identity_key = 1;
+ *     bytes identity_sig = 2;
+ *     bytes data         = 3;
+ *   }
+ */
+static int noise_payload_encode(const uint8_t *identity_key, size_t identity_key_len,
+                                const uint8_t *identity_sig, size_t identity_sig_len,
+                                uint8_t *out, size_t max_out, size_t *written) {
+    size_t pos = 0, bytes = 0;
+    *written = 0;
+
+    if (identity_key && identity_key_len > 0) {
+        if (!protobuf_encode_length_delimited(1, WIRETYPE_LENGTH_DELIMITED,
+                                              (const char*)identity_key, identity_key_len,
+                                              out + pos, max_out - pos, &bytes))
+            return 0;
+        pos += bytes;
+    }
+    if (identity_sig && identity_sig_len > 0) {
+        if (!protobuf_encode_length_delimited(2, WIRETYPE_LENGTH_DELIMITED,
+                                              (const char*)identity_sig, identity_sig_len,
+                                              out + pos, max_out - pos, &bytes))
+            return 0;
+        pos += bytes;
+    }
+    *written = pos;
+    return 1;
+}
+
+/* Decode the payload.  Buffers returned in *out_key and *out_sig are
+ * pointing into the incoming 'in' buffer (no allocs).  */
+static int noise_payload_decode(const uint8_t *in, size_t in_len,
+                                const uint8_t **out_key, size_t *out_key_len,
+                                const uint8_t **out_sig, size_t *out_sig_len) {
+    size_t pos = 0;
+    *out_key = NULL; *out_key_len = 0;
+    *out_sig = NULL; *out_sig_len = 0;
+
+    while (pos < in_len) {
+        int field_no;
+        enum WireType field_type;
+        size_t hdr_bytes = 0;
+        if (!protobuf_decode_field_and_type(in + pos, (int)(in_len - pos), &field_no, &field_type, &hdr_bytes))
+            return 0;
+        pos += hdr_bytes;
+
+        if (field_type != WIRETYPE_LENGTH_DELIMITED)
+            return 0;
+
+        size_t val_len = 0;
+        char *tmp = NULL;
+        if (!protobuf_decode_string(in + pos, in_len - pos, &tmp, &val_len))
+            return 0;
+        /* protobuf_decode_string allocates; we just need the length, then free */
+        free(tmp);
+
+        switch (field_no) {
+            case 1:
+                *out_key = in + pos;
+                *out_key_len = val_len;
+                break;
+            case 2:
+                *out_sig = in + pos;
+                *out_sig_len = val_len;
+                break;
+            default:
+                break;
+        }
+        pos += val_len;
+    }
+    return 1;
+}
+
+/* libp2p Noise uses a 2-byte big-endian length prefix for every handshake message. */
+static int noise_write_frame(struct Stream* stream, const unsigned char* data, size_t len) {
+    unsigned char header[2];
+    header[0] = (len >> 8) & 0xFF;
+    header[1] = len & 0xFF;
+    if (stream->write(stream, header, 2) != 2)
+        return 0;
+    if (stream->write(stream, data, len) != (ssize_t)len)
+        return 0;
+    return 1;
+}
+
+static int noise_read_frame(struct Stream* stream, unsigned char* buf, size_t max_len, size_t* out_len) {
+    unsigned char header[2];
+    if (stream->read(stream, header, 2) != 2)
+        return 0;
+    size_t len = (header[0] << 8) | header[1];
+    if (len > max_len)
+        return 0;
+    size_t total = 0;
+    while (total < len) {
+        ssize_t ret = stream->read(stream, buf + total, len - total);
+        if (ret <= 0)
+            return 0;
+        total += ret;
+    }
+    *out_len = len;
+    return 1;
+}
+
+struct Stream* libp2p_noise_handshake(struct Stream* raw_stream, void* private_key,
+                                      struct Libp2pPeer* peer,
+                                      const noise_identity_callbacks_t *callbacks) {
     (void)peer;
 
     if (!raw_stream)
@@ -337,23 +444,24 @@ struct Stream* libp2p_noise_handshake(struct Stream* raw_stream, void* private_k
     SHA256_Update(&sha, prologue, 0);
     SHA256_Final(h, &sha);
 
+    /* ---- Message 1: e ---- */
     if (!noise_x25519_generate(e_private, e_public))
         return NULL;
-
     noise_mix_hash(h, e_public, NOISE_DHLEN);
-
-    if (raw_stream->write(raw_stream, e_public, NOISE_DHLEN) != NOISE_DHLEN)
+    if (!noise_write_frame(raw_stream, e_public, NOISE_DHLEN))
         return NULL;
 
-    if (raw_stream->read(raw_stream, re_public, NOISE_DHLEN) != NOISE_DHLEN)
+    /* ---- Read remote Message 1: e ---- */
+    size_t frame_len = 0;
+    if (!noise_read_frame(raw_stream, re_public, NOISE_DHLEN, &frame_len) || frame_len != NOISE_DHLEN)
         return NULL;
-
     noise_mix_hash(h, re_public, NOISE_DHLEN);
 
     if (!noise_x25519_dh(e_private, re_public, dh_result))
         return NULL;
     noise_mix_key(ck, temp_k, dh_result, NOISE_DHLEN);
 
+    /* ---- Message 2: s, payload ---- */
     if (!noise_x25519_generate(s_private, s_public))
         return NULL;
 
@@ -361,25 +469,44 @@ struct Stream* libp2p_noise_handshake(struct Stream* raw_stream, void* private_k
     if (!noise_encrypt(temp_k, 0, h, NOISE_HASHLEN, s_public, NOISE_DHLEN, encrypted_s))
         return NULL;
     noise_mix_hash(h, encrypted_s, NOISE_DHLEN + NOISE_TAGLEN);
-
-    if (raw_stream->write(raw_stream, encrypted_s, NOISE_DHLEN + NOISE_TAGLEN) != (ssize_t)(NOISE_DHLEN + NOISE_TAGLEN))
+    if (!noise_write_frame(raw_stream, encrypted_s, NOISE_DHLEN + NOISE_TAGLEN))
         return NULL;
 
     if (!noise_x25519_dh(s_private, re_public, dh_result))
         return NULL;
     noise_mix_key(ck, temp_k, dh_result, NOISE_DHLEN);
 
-    unsigned char payload[1] = {0};
-    unsigned char encrypted_payload[NOISE_TAGLEN];
-    if (!noise_encrypt(temp_k, 0, h, NOISE_HASHLEN, payload, 0, encrypted_payload))
-        return NULL;
-    noise_mix_hash(h, encrypted_payload, NOISE_TAGLEN);
+    /* Build identity payload */
+    uint8_t payload[1024];
+    size_t payload_len = 0;
+    if (callbacks && callbacks->get_identity_key && callbacks->sign) {
+        uint8_t *identity_key = NULL;
+        size_t identity_key_len = 0;
+        uint8_t *identity_sig = NULL;
+        size_t identity_sig_len = 0;
+        if (callbacks->get_identity_key(private_key, &identity_key, &identity_key_len) &&
+            callbacks->sign(private_key, s_public, NOISE_DHLEN, &identity_sig, &identity_sig_len)) {
+            noise_payload_encode(identity_key, identity_key_len,
+                                 identity_sig, identity_sig_len,
+                                 payload, sizeof(payload), &payload_len);
+            if (callbacks->free_buffer) {
+                callbacks->free_buffer(identity_key);
+                callbacks->free_buffer(identity_sig);
+            }
+        }
+    }
 
-    if (raw_stream->write(raw_stream, encrypted_payload, NOISE_TAGLEN) != NOISE_TAGLEN)
+    unsigned char encrypted_payload[NOISE_TAGLEN + 1024];
+    if (!noise_encrypt(temp_k, 0, h, NOISE_HASHLEN, payload, payload_len, encrypted_payload))
+        return NULL;
+    noise_mix_hash(h, encrypted_payload, NOISE_TAGLEN + payload_len);
+    if (!noise_write_frame(raw_stream, encrypted_payload, NOISE_TAGLEN + payload_len))
         return NULL;
 
+    /* ---- Read remote Message 2: s, payload ---- */
     unsigned char remote_encrypted_s[NOISE_DHLEN + NOISE_TAGLEN];
-    if (raw_stream->read(raw_stream, remote_encrypted_s, NOISE_DHLEN + NOISE_TAGLEN) != (ssize_t)(NOISE_DHLEN + NOISE_TAGLEN))
+    if (!noise_read_frame(raw_stream, remote_encrypted_s, sizeof(remote_encrypted_s), &frame_len)
+        || frame_len != NOISE_DHLEN + NOISE_TAGLEN)
         return NULL;
 
     unsigned char remote_s_public[NOISE_DHLEN];
@@ -391,14 +518,39 @@ struct Stream* libp2p_noise_handshake(struct Stream* raw_stream, void* private_k
         return NULL;
     noise_mix_key(ck, temp_k, dh_result, NOISE_DHLEN);
 
-    unsigned char remote_encrypted_payload[NOISE_TAGLEN];
-    if (raw_stream->read(raw_stream, remote_encrypted_payload, NOISE_TAGLEN) != NOISE_TAGLEN)
+    unsigned char remote_encrypted_payload[NOISE_TAGLEN + 1024];
+    if (!noise_read_frame(raw_stream, remote_encrypted_payload, sizeof(remote_encrypted_payload), &frame_len))
         return NULL;
-    unsigned char remote_payload[1];
-    if (!noise_decrypt(temp_k, 0, h, NOISE_HASHLEN, remote_encrypted_payload, NOISE_TAGLEN, remote_payload))
-        return NULL;
-    noise_mix_hash(h, remote_encrypted_payload, NOISE_TAGLEN);
 
+    unsigned char remote_payload[1024];
+    size_t remote_payload_len = 0;
+    if (frame_len >= NOISE_TAGLEN) {
+        remote_payload_len = frame_len - NOISE_TAGLEN;
+        if (!noise_decrypt(temp_k, 0, h, NOISE_HASHLEN, remote_encrypted_payload, frame_len, remote_payload))
+            return NULL;
+        noise_mix_hash(h, remote_encrypted_payload, frame_len);
+
+        if (callbacks && callbacks->verify) {
+            const uint8_t *r_id_key = NULL, *r_id_sig = NULL;
+            size_t r_id_key_len = 0, r_id_sig_len = 0;
+            if (noise_payload_decode(remote_payload, remote_payload_len,
+                                     &r_id_key, &r_id_key_len,
+                                     &r_id_sig, &r_id_sig_len)) {
+                if (r_id_key && r_id_sig) {
+                    if (!callbacks->verify(r_id_key, r_id_key_len,
+                                           remote_s_public, NOISE_DHLEN,
+                                           r_id_sig, r_id_sig_len)) {
+                        libp2p_logger_error("noise", "Remote identity signature verification failed\n");
+                        return NULL;
+                    }
+                }
+            }
+        }
+    } else {
+        noise_mix_hash(h, remote_encrypted_payload, frame_len);
+    }
+
+    /* ---- Split ---- */
     unsigned char split_keys[NOISE_HASHLEN * 2];
     noise_hkdf(ck, NOISE_HASHLEN, NULL, 0, split_keys, split_keys + NOISE_HASHLEN, NOISE_HASHLEN);
 

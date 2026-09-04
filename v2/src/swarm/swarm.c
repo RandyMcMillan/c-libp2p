@@ -57,7 +57,7 @@ int libp2p_swarm_connect(struct Swarm* swarm, const char* multiaddr_str) {
     struct Libp2pPeer target_peer;
     memset(&target_peer, 0, sizeof(struct Libp2pPeer));
 
-    struct Stream* noise_stream = libp2p_noise_handshake(tcp_stream, swarm->private_key, &target_peer);
+    struct Stream* noise_stream = libp2p_noise_handshake(tcp_stream, swarm->private_key, &target_peer, NULL);
     if (noise_stream == NULL) {
         tcp_stream->close(tcp_stream);
         libp2p_multiaddr_free(ma);
