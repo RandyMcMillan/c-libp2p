@@ -30,10 +30,15 @@ LIB = libp2p_v2.a
 
 .PHONY: all clean test
 
-all: $(LIB)
+STUB_OBJ = src/stub/yamux_stub.o
+
+all: $(LIB) $(STUB_OBJ)
 
 $(LIB): $(OBJS)
 	ar rcs $@ $(OBJS)
+
+$(STUB_OBJ): src/stub/yamux_stub.c
+	$(CC) $(CFLAGS) -c $< -o $@
 
 $(TEST_BIN): $(LIB) $(TEST_SRC)
 	$(CC) $(CFLAGS) -o $@ $(TEST_SRC) $(LIB) ../c-protobuf/protobuf.o ../c-protobuf/varint.o $(LDFLAGS)
@@ -42,7 +47,7 @@ $(TEST_BIN): $(LIB) $(TEST_SRC)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 clean:
-	rm -f $(OBJS) $(TEST_BIN) $(LIB)
+	rm -f $(OBJS) $(TEST_BIN) $(LIB) $(STUB_OBJ)
 
 test: $(TEST_BIN)
 	./$(TEST_BIN)
