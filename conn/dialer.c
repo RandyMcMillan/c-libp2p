@@ -144,7 +144,8 @@ int libp2p_conn_dialer_join_swarm(const struct Dialer* dialer, struct Libp2pPeer
 					struct StreamMessage* resp = NULL;
 					if (peer->sessionContext->default_stream->read(peer->sessionContext->default_stream->stream_context, &resp, 5) && resp != NULL) {
 						if (strncmp((char*)resp->data, "/noise\n", 7) == 0) {
-							struct Stream* noise_stream = dialer->noise_handshake(peer->sessionContext->default_stream, dialer->private_key);
+							/* Use the raw TCP stream for Noise to avoid multistream framing corrupting the 2-byte BE length prefixes. */
+								struct Stream* noise_stream = dialer->noise_handshake(peer->sessionContext->insecure_stream, dialer->private_key);
 							if (noise_stream != NULL) {
 								new_stream = noise_stream;
 								peer->sessionContext->default_stream = noise_stream;
