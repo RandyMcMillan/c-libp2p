@@ -36,6 +36,13 @@ struct Dialer {
 
 	struct TransportDialer* fallback_dialer; // the default dialer. NOTE: this should not be in the list of transport_dialers
 	struct SwarmContext* swarm;
+
+	/**
+	 * Optional Noise handshake fallback. If secio fails, the dialer will
+	 * call this function with the raw multistream-wrapped stream.
+	 * Set by the main daemon to bridge the v2 Noise implementation.
+	 */
+	struct Stream* (*noise_handshake)(struct Stream* raw_stream, void* private_key);
 };
 
 /**

@@ -42,6 +42,7 @@ struct Dialer* libp2p_conn_dialer_new(struct Libp2pPeer* peer, struct Peerstore*
 			}
 		}
 		dialer->fallback_dialer = libp2p_conn_tcp_transport_dialer_new(dialer->peer_id, rsa_private_key);
+		dialer->noise_handshake = NULL;
 		return dialer;
 	}
 	libp2p_conn_dialer_free(dialer);
@@ -128,64 +129,80 @@ int libp2p_conn_dialer_join_swarm(const struct Dialer* dialer, struct Libp2pPeer
 	struct Stream* new_stream = peer->sessionContext->default_stream;
 	if (new_stream != NULL) {
 		// secio over multistream
-		new_stream = libp2p_secio_stream_new(new_stream, dialer->peerstore, dialer->private_key);
-		if (new_stream != NULL) {
-			if (!libp2p_secio_ready(peer->sessionContext, 10) ) {
-				return 0;
-			}
+		struct Stream* secio_stream = libp2p_secio_stream_new(new_stream, dialer->peerstore, dialer->private_key);
+		if (secio_stream != NULL && libp2p_secio_ready(peer->sessionContext, 10)) {
+			new_stream = secio_stream;
 			libp2p_logger_debug("dialer", "We successfully negotiated secio.\n");
-			// multistream over secio
-			// Don't bother, as the other side requests multistream
-			//new_stream = libp2p_net_multistream_stream_new(new_stream, 0);
-			if (new_stream != NULL) {
-				if (!libp2p_net_multistream_ready(peer->sessionContext, 5))
-					return 0;
-				libp2p_logger_debug("dialer", "We successfully negotiated multistream over secio.\n");
-				// yamux over multistream
-				new_stream = libp2p_yamux_stream_new(peer->sessionContext->default_stream, 0, dialer->swarm->protocol_handlers);
-				if (new_stream != NULL) {
-					if (!libp2p_yamux_stream_ready(peer->sessionContext, 5)) {
-						libp2p_logger_error("dialer", "Unable to get yamux into the ready status.\n");
-						return 0;
-					}
-					libp2p_logger_debug("dialer", "We successfully negotiated yamux.\n");
-					// the rest should be done on another thread
-					// we have our swarm connection. Now we ask for some "channels"
-					// id over multistream over yamux
-					const struct Libp2pProtocolHandler* handler = libp2p_protocol_get_handler(dialer->swarm->protocol_handlers, "/ipfs/id/1.0.0\n");
-					if (handler != NULL) {
-						Identify* identify = handler->context;
-						if (peer->sessionContext->default_stream->stream_type == STREAM_TYPE_YAMUX) {
-							struct YamuxContext* ctx = libp2p_yamux_get_context(peer->sessionContext->default_stream->stream_context);
-							// first get a new frame. It should be ready to go
-							struct Stream* new_channel = yamux_channel_new(ctx, 0, NULL);
-							if (new_channel != NULL && new_channel->channel > 0) {
-								// then get a multistream
-								struct Stream* yamux_multistream = libp2p_net_multistream_stream_new(new_channel, 0);
-								if (!libp2p_net_multistream_ready(new_channel->stream_context, 10)) {
-									libp2p_logger_error("dialer", "Unable to get multistream over yamux into the ready status.\n");
-									return 0;
-								}
-								// then get an identify
-								libp2p_identify_stream_new(yamux_multistream, identify, 1);
+		} else {
+			// Noise fallback: try /noise before giving up
+			new_stream = NULL;
+			if (dialer->noise_handshake != NULL) {
+				struct StreamMessage noise_msg;
+				noise_msg.data = (uint8_t*)"/noise\n";
+				noise_msg.data_size = 7;
+				if (peer->sessionContext->default_stream->write(peer->sessionContext->default_stream->stream_context, &noise_msg)) {
+					struct StreamMessage* resp = NULL;
+					if (peer->sessionContext->default_stream->read(peer->sessionContext->default_stream->stream_context, &resp, 5) && resp != NULL) {
+						if (strncmp((char*)resp->data, "/noise\n", 7) == 0) {
+							struct Stream* noise_stream = dialer->noise_handshake(peer->sessionContext->default_stream, dialer->private_key);
+							if (noise_stream != NULL) {
+								new_stream = noise_stream;
+								peer->sessionContext->default_stream = noise_stream;
+								libp2p_logger_debug("dialer", "We successfully negotiated noise.\n");
 							}
-						} else {
-							libp2p_logger_error("dialer", "Expected a yamux context, but got a context of type %d.\n", peer->sessionContext->default_stream->stream_type);
 						}
 					}
-					// kademlia over yamux
-					//libp2p_yamux_stream_add(new_stream->stream_context, libp2p_kademlia_stream_new(new_stream));
-					// circuit relay over yamux
-					//libp2p_yamux_stream_add(new_stream->stream_context, libp2p_circuit_relay_stream_new(new_stream));
-					return 1;
-				} else {
-					libp2p_logger_error("dialer", "Unable to do yamux negotiation.\n");
 				}
-			} else {
-				libp2p_logger_error("dialer", "Unable to do secio/multistream negotiation.\n");
 			}
+			if (new_stream == NULL) {
+				libp2p_logger_error("dialer", "Unable to do secio or noise negotiation.\n");
+				return 0;
+			}
+		}
+		// multistream over secure transport (secio or noise)
+		// Don't bother, as the other side requests multistream
+		if (!libp2p_net_multistream_ready(peer->sessionContext, 5))
+			return 0;
+		libp2p_logger_debug("dialer", "We successfully negotiated multistream over secure transport.\n");
+		// yamux over multistream
+		new_stream = libp2p_yamux_stream_new(peer->sessionContext->default_stream, 0, dialer->swarm->protocol_handlers);
+		if (new_stream != NULL) {
+			if (!libp2p_yamux_stream_ready(peer->sessionContext, 5)) {
+				libp2p_logger_error("dialer", "Unable to get yamux into the ready status.\n");
+				return 0;
+			}
+			libp2p_logger_debug("dialer", "We successfully negotiated yamux.\n");
+			// the rest should be done on another thread
+			// we have our swarm connection. Now we ask for some "channels"
+			// id over multistream over yamux
+			const struct Libp2pProtocolHandler* handler = libp2p_protocol_get_handler(dialer->swarm->protocol_handlers, "/ipfs/id/1.0.0\n");
+			if (handler != NULL) {
+				Identify* identify = handler->context;
+				if (peer->sessionContext->default_stream->stream_type == STREAM_TYPE_YAMUX) {
+					struct YamuxContext* ctx = libp2p_yamux_get_context(peer->sessionContext->default_stream->stream_context);
+					// first get a new frame. It should be ready to go
+					struct Stream* new_channel = yamux_channel_new(ctx, 0, NULL);
+					if (new_channel != NULL && new_channel->channel > 0) {
+						// then get a multistream
+						struct Stream* yamux_multistream = libp2p_net_multistream_stream_new(new_channel, 0);
+						if (!libp2p_net_multistream_ready(new_channel->stream_context, 10)) {
+							libp2p_logger_error("dialer", "Unable to get multistream over yamux into the ready status.\n");
+							return 0;
+						}
+						// then get an identify
+						libp2p_identify_stream_new(yamux_multistream, identify, 1);
+					}
+				} else {
+					libp2p_logger_error("dialer", "Expected a yamux context, but got a context of type %d.\n", peer->sessionContext->default_stream->stream_type);
+				}
+			}
+			// kademlia over yamux
+			//libp2p_yamux_stream_add(new_stream->stream_context, libp2p_kademlia_stream_new(new_stream));
+			// circuit relay over yamux
+			//libp2p_yamux_stream_add(new_stream->stream_context, libp2p_circuit_relay_stream_new(new_stream));
+			return 1;
 		} else {
-			libp2p_logger_error("dialer", "Unable to do secio negotiation.\n");
+			libp2p_logger_error("dialer", "Unable to do yamux negotiation.\n");
 		}
 	} else {
 		libp2p_logger_error("dialer", "Unable to do initial multistream negotiation.\n");

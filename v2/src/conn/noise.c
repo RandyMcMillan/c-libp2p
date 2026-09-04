@@ -9,7 +9,6 @@
 #include "libp2p/conn/noise.h"
 #include "libp2p/conn/multistream.h"
 #include "protobuf.h"
-#include "libp2p/peer/peerstore.h"
 #include "libp2p/utils/logger.h"
 
 #define NOISE_PROTOCOL_ID "/noise"
@@ -408,15 +407,12 @@ static int noise_read_frame(struct Libp2pV2Stream* stream, unsigned char* buf, s
     return 1;
 }
 
-struct Libp2pV2Stream* libp2p_noise_handshake(struct Libp2pV2Stream* raw_stream, void* private_key,
-                                      struct Libp2pPeer* peer,
-                                      const noise_identity_callbacks_t *callbacks) {
+struct Libp2pV2Stream* libp2p_noise_handshake_raw(struct Libp2pV2Stream* raw_stream, void* private_key,
+                                                   struct Libp2pPeer* peer,
+                                                   const noise_identity_callbacks_t *callbacks) {
     (void)peer;
 
     if (!raw_stream)
-        return NULL;
-
-    if (!libp2p_net_multistream_negotiate_protocol(raw_stream, "/noise"))
         return NULL;
 
     unsigned char h[NOISE_HASHLEN];
@@ -575,4 +571,16 @@ struct Libp2pV2Stream* libp2p_noise_handshake(struct Libp2pV2Stream* raw_stream,
     stream->close = noise_stream_close;
 
     return stream;
+}
+
+struct Libp2pV2Stream* libp2p_noise_handshake(struct Libp2pV2Stream* raw_stream, void* private_key,
+                                      struct Libp2pPeer* peer,
+                                      const noise_identity_callbacks_t *callbacks) {
+    if (!raw_stream)
+        return NULL;
+
+    if (!libp2p_net_multistream_negotiate_protocol(raw_stream, "/noise"))
+        return NULL;
+
+    return libp2p_noise_handshake_raw(raw_stream, private_key, peer, callbacks);
 }
