@@ -6,6 +6,10 @@
 #include <openssl/hmac.h>
 #include <openssl/sha.h>
 
+#ifdef OPENSSL_IS_BORINGSSL
+#include <openssl/aead.h>
+#endif
+
 #include "libp2p/conn/noise.h"
 #include "libp2p/conn/multistream.h"
 #include "protobuf.h"
@@ -61,13 +65,26 @@ static int noise_encrypt(const unsigned char* key, uint64_t nonce,
                          const unsigned char* ad, size_t ad_len,
                          const unsigned char* plaintext, size_t plaintext_len,
                          unsigned char* ciphertext) {
-    EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
-    if (!ctx) return 0;
-
     unsigned char nonce_bytes[NOISE_NONCE_LEN] = {0};
     for (int i = 0; i < 8; i++) {
         nonce_bytes[4 + i] = (nonce >> (i * 8)) & 0xFF;
     }
+
+#ifdef OPENSSL_IS_BORINGSSL
+    EVP_AEAD_CTX ctx;
+    if (!EVP_AEAD_CTX_init(&ctx, EVP_aead_chacha20_poly1305(), key, NOISE_KEYLEN, EVP_AEAD_DEFAULT_TAG_LENGTH, NULL))
+        return 0;
+
+    size_t out_len;
+    int ret = EVP_AEAD_CTX_seal(&ctx, ciphertext, &out_len, plaintext_len + NOISE_TAGLEN,
+                                nonce_bytes, NOISE_NONCE_LEN,
+                                plaintext, plaintext_len,
+                                ad, ad_len);
+    EVP_AEAD_CTX_cleanup(&ctx);
+    return ret && (out_len == plaintext_len + NOISE_TAGLEN);
+#else
+    EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
+    if (!ctx) return 0;
 
     int len;
     int ciphertext_len;
@@ -95,6 +112,7 @@ static int noise_encrypt(const unsigned char* key, uint64_t nonce,
 fail:
     EVP_CIPHER_CTX_free(ctx);
     return 0;
+#endif
 }
 
 static int noise_decrypt(const unsigned char* key, uint64_t nonce,
