@@ -6,7 +6,7 @@ SRCS = src/net/multiaddr.c \
        src/net/tcp_dial.c \
        src/peer/peerstore.c \
        src/conn/multistream.c \
-       src/conn/secio.c \
+       src/conn/noise.c \
        src/conn/yamux.c \
        src/conn/connection.c \
        src/swarm/swarm.c \

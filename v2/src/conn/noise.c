@@ -34,7 +34,7 @@ struct NoiseStreamContext {
 
 static int noise_hkdf(const unsigned char* salt, size_t salt_len,
                       const unsigned char* ikm, size_t ikm_len,
-                      unsigned char* okm1, size_t okm1_len,
+                      unsigned char* okm1,
                       unsigned char* okm2, size_t okm2_len) {
     unsigned char prk[NOISE_HASHLEN];
     unsigned int prk_len = NOISE_HASHLEN;
@@ -113,7 +113,6 @@ static int noise_decrypt(const unsigned char* key, uint64_t nonce,
     }
 
     int len;
-    int plaintext_len;
     size_t data_len = ciphertext_len - NOISE_TAGLEN;
 
     if (!EVP_DecryptInit_ex(ctx, EVP_chacha20_poly1305(), NULL, NULL, NULL))
@@ -128,10 +127,8 @@ static int noise_decrypt(const unsigned char* key, uint64_t nonce,
         goto fail;
     if (!EVP_DecryptUpdate(ctx, plaintext, &len, ciphertext, (int)data_len))
         goto fail;
-    plaintext_len = len;
     if (!EVP_DecryptFinal_ex(ctx, plaintext + len, &len))
         goto fail;
-    plaintext_len += len;
 
     EVP_CIPHER_CTX_free(ctx);
     return 1;
@@ -262,7 +259,8 @@ static int noise_x25519_dh(const unsigned char* private_key, const unsigned char
     if (!priv || !pub)
         goto fail;
 
-    EVP_PKEY_CTX* ctx = EVP_PKEY_CTX_new(priv, NULL);
+    EVP_PKEY_CTX* ctx = NULL;
+    ctx = EVP_PKEY_CTX_new(priv, NULL);
     if (!ctx)
         goto fail;
     if (EVP_PKEY_derive_init(ctx) <= 0)
@@ -299,7 +297,7 @@ static void noise_mix_hash(unsigned char* h, const unsigned char* data, size_t l
 static void noise_mix_key(unsigned char* ck, unsigned char* k,
                           const unsigned char* input_key_material, size_t ikm_len) {
     unsigned char temp[NOISE_HASHLEN * 2];
-    noise_hkdf(ck, NOISE_HASHLEN, input_key_material, ikm_len, temp, NOISE_HASHLEN, temp + NOISE_HASHLEN, NOISE_HASHLEN);
+    noise_hkdf(ck, NOISE_HASHLEN, input_key_material, ikm_len, temp, temp + NOISE_HASHLEN, NOISE_HASHLEN);
     memcpy(ck, temp, NOISE_HASHLEN);
     memcpy(k, temp + NOISE_HASHLEN, NOISE_HASHLEN);
 }
@@ -322,7 +320,6 @@ struct Stream* libp2p_noise_handshake(struct Stream* raw_stream, void* private_k
     unsigned char re_public[NOISE_DHLEN];
     unsigned char s_private[NOISE_DHLEN];
     unsigned char s_public[NOISE_DHLEN];
-    unsigned char rs_public[NOISE_DHLEN];
     unsigned char dh_result[NOISE_DHLEN];
 
     memset(h, 0, NOISE_HASHLEN);
@@ -403,7 +400,7 @@ struct Stream* libp2p_noise_handshake(struct Stream* raw_stream, void* private_k
     noise_mix_hash(h, remote_encrypted_payload, NOISE_TAGLEN);
 
     unsigned char split_keys[NOISE_HASHLEN * 2];
-    noise_hkdf(ck, NOISE_HASHLEN, NULL, 0, split_keys, NOISE_HASHLEN, split_keys + NOISE_HASHLEN, NOISE_HASHLEN);
+    noise_hkdf(ck, NOISE_HASHLEN, NULL, 0, split_keys, split_keys + NOISE_HASHLEN, NOISE_HASHLEN);
 
     struct NoiseStreamContext* nctx = calloc(1, sizeof(struct NoiseStreamContext));
     if (!nctx)

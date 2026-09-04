@@ -4,7 +4,7 @@
 
 #include "libp2p/swarm/swarm.h"
 #include "libp2p/conn/multistream.h"
-#include "libp2p/conn/secio.h"
+#include "libp2p/conn/noise.h"
 #include "libp2p/conn/yamux.h"
 #include "libp2p/net/multiaddr.h"
 #include "libp2p/net/tcp.h"
@@ -56,16 +56,16 @@ int libp2p_swarm_connect(struct Swarm* swarm, const char* multiaddr_str) {
     struct Libp2pPeer target_peer;
     memset(&target_peer, 0, sizeof(struct Libp2pPeer));
 
-    struct Stream* secio_stream = libp2p_secio_handshake(tcp_stream, swarm->private_key, &target_peer);
-    if (secio_stream == NULL) {
+    struct Stream* noise_stream = libp2p_noise_handshake(tcp_stream, swarm->private_key, &target_peer);
+    if (noise_stream == NULL) {
         tcp_stream->close(tcp_stream);
         libp2p_multiaddr_free(ma);
         return 0;
     }
 
-    struct YamuxSession* session = libp2p_yamux_session_new(secio_stream, 0);
+    struct YamuxSession* session = libp2p_yamux_session_new(noise_stream, 0);
     if (session == NULL) {
-        secio_stream->close(secio_stream);
+        noise_stream->close(noise_stream);
         libp2p_multiaddr_free(ma);
         return 0;
     }
