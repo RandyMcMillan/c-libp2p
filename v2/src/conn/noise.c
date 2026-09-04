@@ -24,7 +24,7 @@
 #define NOISE_DHLEN 32
 
 struct NoiseStreamContext {
-    struct Stream* raw_stream;
+    struct Libp2pV2Stream* raw_stream;
     EVP_CIPHER_CTX* read_ctx;
     EVP_CIPHER_CTX* write_ctx;
     unsigned char read_key[NOISE_KEYLEN];
@@ -139,7 +139,7 @@ fail:
     return 0;
 }
 
-static ssize_t noise_stream_read(struct Stream* stream, unsigned char* buf, size_t count) {
+static ssize_t noise_stream_read(struct Libp2pV2Stream* stream, unsigned char* buf, size_t count) {
     if (!stream || !stream->stream_context || !buf)
         return -1;
 
@@ -184,7 +184,7 @@ static ssize_t noise_stream_read(struct Stream* stream, unsigned char* buf, size
     return (ssize_t)plaintext_len;
 }
 
-static ssize_t noise_stream_write(struct Stream* stream, const unsigned char* buf, size_t count) {
+static ssize_t noise_stream_write(struct Libp2pV2Stream* stream, const unsigned char* buf, size_t count) {
     if (!stream || !stream->stream_context || !buf)
         return -1;
 
@@ -214,7 +214,7 @@ static ssize_t noise_stream_write(struct Stream* stream, const unsigned char* bu
     return -1;
 }
 
-static void noise_stream_close(struct Stream* stream) {
+static void noise_stream_close(struct Libp2pV2Stream* stream) {
     if (!stream) return;
     struct NoiseStreamContext* ctx = (struct NoiseStreamContext*)stream->stream_context;
     if (ctx) {
@@ -379,7 +379,7 @@ static int noise_payload_decode(const uint8_t *in, size_t in_len,
 }
 
 /* libp2p Noise uses a 2-byte big-endian length prefix for every handshake message. */
-static int noise_write_frame(struct Stream* stream, const unsigned char* data, size_t len) {
+static int noise_write_frame(struct Libp2pV2Stream* stream, const unsigned char* data, size_t len) {
     unsigned char header[2];
     header[0] = (len >> 8) & 0xFF;
     header[1] = len & 0xFF;
@@ -390,7 +390,7 @@ static int noise_write_frame(struct Stream* stream, const unsigned char* data, s
     return 1;
 }
 
-static int noise_read_frame(struct Stream* stream, unsigned char* buf, size_t max_len, size_t* out_len) {
+static int noise_read_frame(struct Libp2pV2Stream* stream, unsigned char* buf, size_t max_len, size_t* out_len) {
     unsigned char header[2];
     if (stream->read(stream, header, 2) != 2)
         return 0;
@@ -408,7 +408,7 @@ static int noise_read_frame(struct Stream* stream, unsigned char* buf, size_t ma
     return 1;
 }
 
-struct Stream* libp2p_noise_handshake(struct Stream* raw_stream, void* private_key,
+struct Libp2pV2Stream* libp2p_noise_handshake(struct Libp2pV2Stream* raw_stream, void* private_key,
                                       struct Libp2pPeer* peer,
                                       const noise_identity_callbacks_t *callbacks) {
     (void)peer;
@@ -564,7 +564,7 @@ struct Stream* libp2p_noise_handshake(struct Stream* raw_stream, void* private_k
     nctx->write_nonce = 0;
     nctx->read_nonce = 0;
 
-    struct Stream* stream = calloc(1, sizeof(struct Stream));
+    struct Libp2pV2Stream* stream = calloc(1, sizeof(struct Libp2pV2Stream));
     if (!stream) {
         free(nctx);
         return NULL;

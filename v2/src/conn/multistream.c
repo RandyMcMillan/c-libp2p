@@ -8,7 +8,7 @@
 
 #define MULTISTREAM_MSG_HEADER "/multistream/1.0.0\n"
 
-static int write_length_prefixed_msg(struct Stream* stream, const char* msg) {
+static int write_length_prefixed_msg(struct Libp2pV2Stream* stream, const char* msg) {
     if (stream == NULL || msg == NULL)
         return 0;
 
@@ -35,7 +35,7 @@ static int write_length_prefixed_msg(struct Stream* stream, const char* msg) {
     return 1;
 }
 
-static int read_length_prefixed_msg(struct Stream* stream, char* buffer, size_t max_len) {
+static int read_length_prefixed_msg(struct Libp2pV2Stream* stream, char* buffer, size_t max_len) {
     if (stream == NULL || buffer == NULL || max_len == 0)
         return 0;
 
@@ -66,7 +66,7 @@ static int read_length_prefixed_msg(struct Stream* stream, char* buffer, size_t 
     return 1;
 }
 
-int libp2p_net_multistream_connect(struct Stream* stream) {
+int libp2p_net_multistream_connect(struct Libp2pV2Stream* stream) {
     if (stream == NULL)
         return 0;
 
@@ -89,7 +89,7 @@ int libp2p_net_multistream_connect(struct Stream* stream) {
     return 1;
 }
 
-int libp2p_net_multistream_negotiate_protocol(struct Stream* stream, const char* protocol_id) {
+int libp2p_net_multistream_negotiate_protocol(struct Libp2pV2Stream* stream, const char* protocol_id) {
     if (stream == NULL || protocol_id == NULL)
         return 0;
 

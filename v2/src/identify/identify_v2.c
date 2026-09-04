@@ -39,7 +39,7 @@ static int add_string_to_array(char*** array, size_t* count, char* item) {
     return 1;
 }
 
-int libp2p_identify_send_response(struct Stream* stream, struct Peerstore* peerstore) {
+int libp2p_identify_send_response(struct Libp2pV2Stream* stream, struct Peerstore* peerstore) {
     if (!stream || !peerstore) return 0;
 
     unsigned char buf[4096];
@@ -76,7 +76,7 @@ int libp2p_identify_send_response(struct Stream* stream, struct Peerstore* peers
     return 1;
 }
 
-int libp2p_identify_receive(struct Stream* stream, struct Libp2pPeer* peer) {
+int libp2p_identify_receive(struct Libp2pV2Stream* stream, struct Libp2pPeer* peer) {
     if (!stream || !peer) return 0;
 
     unsigned char buf[4096];

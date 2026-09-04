@@ -39,7 +39,7 @@ int libp2p_swarm_connect(struct Swarm* swarm, const char* multiaddr_str) {
         return 0;
     }
 
-    struct Stream* tcp_stream = libp2p_net_tcp_dial(ma->ip, ma->port);
+    struct Libp2pV2Stream* tcp_stream = libp2p_net_tcp_dial(ma->ip, ma->port);
     if (tcp_stream == NULL) {
         libp2p_logger_error("swarm", "Failed to establish TCP connection via swarm\n");
         libp2p_multiaddr_free(ma);
@@ -57,7 +57,7 @@ int libp2p_swarm_connect(struct Swarm* swarm, const char* multiaddr_str) {
     struct Libp2pPeer target_peer;
     memset(&target_peer, 0, sizeof(struct Libp2pPeer));
 
-    struct Stream* noise_stream = libp2p_noise_handshake(tcp_stream, swarm->private_key, &target_peer, NULL);
+    struct Libp2pV2Stream* noise_stream = libp2p_noise_handshake(tcp_stream, swarm->private_key, &target_peer, NULL);
     if (noise_stream == NULL) {
         tcp_stream->close(tcp_stream);
         libp2p_multiaddr_free(ma);
@@ -71,7 +71,7 @@ int libp2p_swarm_connect(struct Swarm* swarm, const char* multiaddr_str) {
         return 0;
     }
 
-    struct Stream* id_stream = libp2p_yamux_stream_open(session);
+    struct Libp2pV2Stream* id_stream = libp2p_yamux_stream_open(session);
     if (id_stream != NULL) {
         if (libp2p_identify_send_response(id_stream, swarm->peerstore)) {
             libp2p_identify_receive(id_stream, &target_peer);

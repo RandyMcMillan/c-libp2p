@@ -29,7 +29,7 @@ void libp2p_identify_info_free(IdentifyInfo* info);
  * @param peerstore The local peerstore (for public key, listen addrs, etc.)
  * @return 1 on success, 0 on failure.
  */
-int libp2p_identify_send_response(struct Stream* stream, struct Peerstore* peerstore);
+int libp2p_identify_send_response(struct Libp2pV2Stream* stream, struct Peerstore* peerstore);
 
 /**
  * Receive and parse an Identify message from a v2 Stream.
@@ -37,6 +37,6 @@ int libp2p_identify_send_response(struct Stream* stream, struct Peerstore* peers
  * @param peer The peer struct to populate with remote identify info.
  * @return 1 on success, 0 on failure.
  */
-int libp2p_identify_receive(struct Stream* stream, struct Libp2pPeer* peer);
+int libp2p_identify_receive(struct Libp2pV2Stream* stream, struct Libp2pPeer* peer);
 
 #endif /* LIBP2P_IDENTIFY_V2_H */

@@ -11,7 +11,7 @@ struct Libp2pLinkedList {
 struct Libp2pPeer {
     char* peer_id;
     struct Libp2pLinkedList* addr_head;
-    struct Stream* connection;
+    struct Libp2pV2Stream* connection;
     void* sessionContext;
 };
 

@@ -28,7 +28,7 @@ struct YamuxHeader {
 #pragma pack(pop)
 
 struct YamuxSession {
-    struct Stream* underlying_stream;
+    struct Libp2pV2Stream* underlying_stream;
     uint32_t next_stream_id;
     int is_server;
 };
@@ -38,7 +38,7 @@ struct YamuxStreamContext {
     uint32_t stream_id;
 };
 
-static ssize_t yamux_stream_write(struct Stream* stream, const unsigned char* buf, size_t count) {
+static ssize_t yamux_stream_write(struct Libp2pV2Stream* stream, const unsigned char* buf, size_t count) {
     if (stream == NULL || stream->stream_context == NULL)
         return -1;
 
@@ -57,7 +57,7 @@ static ssize_t yamux_stream_write(struct Stream* stream, const unsigned char* bu
     return ctx->session->underlying_stream->write(ctx->session->underlying_stream, buf, count);
 }
 
-static ssize_t yamux_stream_read(struct Stream* stream, unsigned char* buf, size_t count) {
+static ssize_t yamux_stream_read(struct Libp2pV2Stream* stream, unsigned char* buf, size_t count) {
     if (stream == NULL || stream->stream_context == NULL)
         return -1;
 
@@ -74,7 +74,7 @@ static ssize_t yamux_stream_read(struct Stream* stream, unsigned char* buf, size
     return ctx->session->underlying_stream->read(ctx->session->underlying_stream, buf, payload_len);
 }
 
-static void yamux_stream_close(struct Stream* stream) {
+static void yamux_stream_close(struct Libp2pV2Stream* stream) {
     if (stream == NULL)
         return;
 
@@ -96,7 +96,7 @@ static void yamux_stream_close(struct Stream* stream) {
     free(stream);
 }
 
-struct YamuxSession* libp2p_yamux_session_new(struct Stream* stream, int is_server) {
+struct YamuxSession* libp2p_yamux_session_new(struct Libp2pV2Stream* stream, int is_server) {
     if (stream == NULL)
         return NULL;
 
@@ -109,7 +109,7 @@ struct YamuxSession* libp2p_yamux_session_new(struct Stream* stream, int is_serv
     return session;
 }
 
-struct Stream* libp2p_yamux_stream_open(struct YamuxSession* session) {
+struct Libp2pV2Stream* libp2p_yamux_stream_open(struct YamuxSession* session) {
     if (session == NULL)
         return NULL;
 
@@ -121,7 +121,7 @@ struct Stream* libp2p_yamux_stream_open(struct YamuxSession* session) {
     ctx->stream_id = session->next_stream_id;
     session->next_stream_id += 2;
 
-    struct Stream* stream = (struct Stream*)calloc(1, sizeof(struct Stream));
+    struct Libp2pV2Stream* stream = (struct Libp2pV2Stream*)calloc(1, sizeof(struct Libp2pV2Stream));
     if (stream == NULL) {
         free(ctx);
         return NULL;

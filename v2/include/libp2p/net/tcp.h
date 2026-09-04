@@ -5,13 +5,13 @@
 #include <stdint.h>
 #include <sys/types.h>
 
-struct Stream {
+struct Libp2pV2Stream {
     void* stream_context;
-    ssize_t (*read)(struct Stream* stream, unsigned char* buf, size_t count);
-    ssize_t (*write)(struct Stream* stream, const unsigned char* buf, size_t count);
-    void (*close)(struct Stream* stream);
+    ssize_t (*read)(struct Libp2pV2Stream* stream, unsigned char* buf, size_t count);
+    ssize_t (*write)(struct Libp2pV2Stream* stream, const unsigned char* buf, size_t count);
+    void (*close)(struct Libp2pV2Stream* stream);
 };
 
-struct Stream* libp2p_net_tcp_dial(const char* ip_address, uint16_t port);
+struct Libp2pV2Stream* libp2p_net_tcp_dial(const char* ip_address, uint16_t port);
 
 #endif /* LIBP2P_NET_TCP_H */

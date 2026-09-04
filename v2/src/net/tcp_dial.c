@@ -15,7 +15,7 @@ struct tcp_stream_context {
     int fd;
 };
 
-static ssize_t tcp_stream_read(struct Stream* stream, unsigned char* buf, size_t count) {
+static ssize_t tcp_stream_read(struct Libp2pV2Stream* stream, unsigned char* buf, size_t count) {
     struct tcp_stream_context* ctx = (struct tcp_stream_context*)stream->stream_context;
     if (ctx == NULL || ctx->fd < 0)
         return -1;
@@ -23,7 +23,7 @@ static ssize_t tcp_stream_read(struct Stream* stream, unsigned char* buf, size_t
     return ret;
 }
 
-static ssize_t tcp_stream_write(struct Stream* stream, const unsigned char* buf, size_t count) {
+static ssize_t tcp_stream_write(struct Libp2pV2Stream* stream, const unsigned char* buf, size_t count) {
     struct tcp_stream_context* ctx = (struct tcp_stream_context*)stream->stream_context;
     if (ctx == NULL || ctx->fd < 0)
         return -1;
@@ -40,7 +40,7 @@ static ssize_t tcp_stream_write(struct Stream* stream, const unsigned char* buf,
     return total;
 }
 
-static void tcp_stream_close(struct Stream* stream) {
+static void tcp_stream_close(struct Libp2pV2Stream* stream) {
     if (stream == NULL)
         return;
     struct tcp_stream_context* ctx = (struct tcp_stream_context*)stream->stream_context;
@@ -54,7 +54,7 @@ static void tcp_stream_close(struct Stream* stream) {
     free(stream);
 }
 
-struct Stream* libp2p_net_tcp_dial(const char* ip_address, uint16_t port) {
+struct Libp2pV2Stream* libp2p_net_tcp_dial(const char* ip_address, uint16_t port) {
     int fd = socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0) {
         libp2p_logger_error("tcp", "socket creation failed: %s\n", strerror(errno));
@@ -84,7 +84,7 @@ struct Stream* libp2p_net_tcp_dial(const char* ip_address, uint16_t port) {
     }
     ctx->fd = fd;
 
-    struct Stream* stream = (struct Stream*)calloc(1, sizeof(struct Stream));
+    struct Libp2pV2Stream* stream = (struct Libp2pV2Stream*)calloc(1, sizeof(struct Libp2pV2Stream));
     if (stream == NULL) {
         free(ctx);
         close(fd);

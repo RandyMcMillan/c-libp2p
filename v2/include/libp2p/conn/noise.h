@@ -51,7 +51,7 @@ typedef struct {
     void (*free_buffer)(uint8_t *buf);
 } noise_identity_callbacks_t;
 
-struct Stream* libp2p_noise_handshake(struct Stream* raw_stream, void* private_key,
+struct Libp2pV2Stream* libp2p_noise_handshake(struct Libp2pV2Stream* raw_stream, void* private_key,
                                       struct Libp2pPeer* peer,
                                       const noise_identity_callbacks_t *callbacks);
 

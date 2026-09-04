@@ -14,14 +14,14 @@
 #define NONCE_SIZE 16
 
 struct SecioStreamContext {
-    struct Stream* raw_stream;
+    struct Libp2pV2Stream* raw_stream;
     EVP_CIPHER_CTX* read_ctx;
     EVP_CIPHER_CTX* write_ctx;
     unsigned char local_nonce[NONCE_SIZE];
     unsigned char remote_nonce[NONCE_SIZE];
 };
 
-static ssize_t secio_stream_read(struct Stream* stream, unsigned char* buf, size_t count) {
+static ssize_t secio_stream_read(struct Libp2pV2Stream* stream, unsigned char* buf, size_t count) {
     if (stream == NULL || stream->stream_context == NULL || buf == NULL)
         return -1;
 
@@ -44,7 +44,7 @@ static ssize_t secio_stream_read(struct Stream* stream, unsigned char* buf, size
     return (ssize_t)out_len;
 }
 
-static ssize_t secio_stream_write(struct Stream* stream, const unsigned char* buf, size_t count) {
+static ssize_t secio_stream_write(struct Libp2pV2Stream* stream, const unsigned char* buf, size_t count) {
     if (stream == NULL || stream->stream_context == NULL || buf == NULL)
         return -1;
 
@@ -61,7 +61,7 @@ static ssize_t secio_stream_write(struct Stream* stream, const unsigned char* bu
     return ctx->raw_stream->write(ctx->raw_stream, cipher_buf, (size_t)out_len);
 }
 
-static void secio_stream_close(struct Stream* stream) {
+static void secio_stream_close(struct Libp2pV2Stream* stream) {
     if (stream == NULL)
         return;
 
@@ -76,7 +76,7 @@ static void secio_stream_close(struct Stream* stream) {
     free(stream);
 }
 
-struct Stream* libp2p_secio_handshake(struct Stream* raw_stream, void* private_key, struct Libp2pPeer* peer) {
+struct Libp2pV2Stream* libp2p_secio_handshake(struct Libp2pV2Stream* raw_stream, void* private_key, struct Libp2pPeer* peer) {
     (void)private_key;
     (void)peer;
 
@@ -115,7 +115,7 @@ struct Stream* libp2p_secio_handshake(struct Stream* raw_stream, void* private_k
     EVP_EncryptInit_ex(ctx->write_ctx, EVP_aes_256_ctr(), NULL, key, iv);
     EVP_DecryptInit_ex(ctx->read_ctx, EVP_aes_256_ctr(), NULL, key, iv);
 
-    struct Stream* encrypted_stream = (struct Stream*)calloc(1, sizeof(struct Stream));
+    struct Libp2pV2Stream* encrypted_stream = (struct Libp2pV2Stream*)calloc(1, sizeof(struct Libp2pV2Stream));
     if (encrypted_stream == NULL) {
         EVP_CIPHER_CTX_free(ctx->read_ctx);
         EVP_CIPHER_CTX_free(ctx->write_ctx);
