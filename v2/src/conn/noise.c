@@ -122,13 +122,26 @@ static int noise_decrypt(const unsigned char* key, uint64_t nonce,
     if (ciphertext_len < NOISE_TAGLEN)
         return 0;
 
-    EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
-    if (!ctx) return 0;
-
     unsigned char nonce_bytes[NOISE_NONCE_LEN] = {0};
     for (int i = 0; i < 8; i++) {
         nonce_bytes[4 + i] = (nonce >> (i * 8)) & 0xFF;
     }
+
+#ifdef OPENSSL_IS_BORINGSSL
+    EVP_AEAD_CTX ctx;
+    if (!EVP_AEAD_CTX_init(&ctx, EVP_aead_chacha20_poly1305(), key, NOISE_KEYLEN, EVP_AEAD_DEFAULT_TAG_LENGTH, NULL))
+        return 0;
+
+    size_t out_len;
+    int ret = EVP_AEAD_CTX_open(&ctx, plaintext, &out_len, ciphertext_len - NOISE_TAGLEN,
+                                nonce_bytes, NOISE_NONCE_LEN,
+                                ciphertext, ciphertext_len,
+                                ad, ad_len);
+    EVP_AEAD_CTX_cleanup(&ctx);
+    return ret && (out_len == ciphertext_len - NOISE_TAGLEN);
+#else
+    EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
+    if (!ctx) return 0;
 
     int len;
     size_t data_len = ciphertext_len - NOISE_TAGLEN;
@@ -154,6 +167,7 @@ static int noise_decrypt(const unsigned char* key, uint64_t nonce,
 fail:
     EVP_CIPHER_CTX_free(ctx);
     return 0;
+#endif
 }
 
 static ssize_t noise_stream_read(struct Libp2pV2Stream* stream, unsigned char* buf, size_t count) {
