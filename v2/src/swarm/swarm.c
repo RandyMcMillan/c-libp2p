@@ -6,6 +6,7 @@
 #include "libp2p/conn/multistream.h"
 #include "libp2p/conn/noise.h"
 #include "libp2p/conn/yamux.h"
+#include "libp2p/identify/identify_v2.h"
 #include "libp2p/net/multiaddr.h"
 #include "libp2p/net/tcp.h"
 #include "libp2p/utils/logger.h"
@@ -72,6 +73,9 @@ int libp2p_swarm_connect(struct Swarm* swarm, const char* multiaddr_str) {
 
     struct Stream* id_stream = libp2p_yamux_stream_open(session);
     if (id_stream != NULL) {
+        if (libp2p_identify_send_response(id_stream, swarm->peerstore)) {
+            libp2p_identify_receive(id_stream, &target_peer);
+        }
         id_stream->close(id_stream);
     }
 

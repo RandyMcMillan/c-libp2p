@@ -256,10 +256,10 @@ static int noise_x25519_dh(const unsigned char* private_key, const unsigned char
                              unsigned char* shared_secret) {
     EVP_PKEY* priv = EVP_PKEY_new_raw_private_key(EVP_PKEY_X25519, NULL, private_key, NOISE_DHLEN);
     EVP_PKEY* pub = EVP_PKEY_new_raw_public_key(EVP_PKEY_X25519, NULL, public_key, NOISE_DHLEN);
+    EVP_PKEY_CTX* ctx = NULL;
     if (!priv || !pub)
         goto fail;
 
-    EVP_PKEY_CTX* ctx = NULL;
     ctx = EVP_PKEY_CTX_new(priv, NULL);
     if (!ctx)
         goto fail;

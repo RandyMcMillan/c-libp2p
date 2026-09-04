@@ -1,5 +1,5 @@
 CC = gcc
-CFLAGS = -Wall -Wextra -std=c99 -I include -I /opt/homebrew/opt/openssl/include
+CFLAGS = -Wall -Wextra -std=c99 -I include -I /opt/homebrew/opt/openssl/include -I ../c-protobuf
 LDFLAGS = -L /opt/homebrew/opt/openssl/lib -lssl -lcrypto
 
 SRCS = src/net/multiaddr.c \
@@ -9,6 +9,7 @@ SRCS = src/net/multiaddr.c \
        src/conn/noise.c \
        src/conn/yamux.c \
        src/conn/connection.c \
+       src/identify/identify_v2.c \
        src/swarm/swarm.c \
        src/utils/logger.c
 
@@ -22,7 +23,7 @@ TEST_BIN = test_v2
 all: $(TEST_BIN)
 
 $(TEST_BIN): $(OBJS) $(TEST_SRC)
-	$(CC) $(CFLAGS) -o $@ $(TEST_SRC) $(OBJS) $(LDFLAGS)
+	$(CC) $(CFLAGS) -o $@ $(TEST_SRC) $(OBJS) ../c-protobuf/protobuf.o ../c-protobuf/varint.o $(LDFLAGS)
 
 %.o: %.c
 	$(CC) $(CFLAGS) -c $< -o $@
