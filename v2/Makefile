@@ -1,6 +1,14 @@
 CC = gcc
-CFLAGS = -Wall -Wextra -std=c99 -I include -I /opt/homebrew/opt/openssl/include -I ../c-protobuf
-LDFLAGS = -L /opt/homebrew/opt/openssl/lib -lssl -lcrypto
+CFLAGS = -Wall -Wextra -std=c99 -I include -I ../c-protobuf
+LDFLAGS =
+
+ifdef HAS_LSQUIC
+CFLAGS += -DHAS_LSQUIC -I ../../boringssl/include
+LDFLAGS += ../../boringssl/build-c-ipfs/libcrypto.a ../../boringssl/build-c-ipfs/libssl.a
+else
+CFLAGS += -I /opt/homebrew/opt/openssl/include
+LDFLAGS += -L /opt/homebrew/opt/openssl/lib -lssl -lcrypto
+endif
 
 SRCS = src/net/multiaddr.c \
        src/net/tcp_dial.c \
