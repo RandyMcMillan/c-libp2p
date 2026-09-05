@@ -86,14 +86,17 @@ int libp2p_protocol_marshal(struct StreamMessage* msg, struct Stream* stream, st
 
 	if (handler == NULL) {
 		if (appears_to_be_a_protocol(msg)) {
-			struct StreamMessage na_message;
-			na_message.data = (uint8_t*)"na\n";
-			na_message.data_size = 3;
-			stream->write(stream->stream_context, &na_message);
+			// Don't echo na back to na
+			if (msg->data_size != 3 || strncmp((char*)msg->data, "na\n", 3) != 0) {
+				struct StreamMessage na_message;
+				na_message.data = (uint8_t*)"na\n";
+				na_message.data_size = 3;
+				stream->write(stream->stream_context, &na_message);
+			}
 		}
 		// set the msg->error code
 		msg->error_number = 100;
-		return -1;
+		return 0;
 	}
 
 	return handler->HandleMessage(msg, stream, handler->context);

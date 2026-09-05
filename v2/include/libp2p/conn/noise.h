@@ -55,6 +55,9 @@ struct Libp2pV2Stream* libp2p_noise_handshake(struct Libp2pV2Stream* raw_stream,
                                       struct Libp2pPeer* peer,
                                       const noise_identity_callbacks_t *callbacks);
 
+/** Initialize default RSA-based identity callbacks for c-ipfs. */
+void libp2p_noise_identity_callbacks_init(noise_identity_callbacks_t *callbacks);
+
 /**
  * Raw Noise handshake without multistream negotiation.
  * Callers that have already negotiated `/noise` via another mechanism
@@ -63,5 +66,9 @@ struct Libp2pV2Stream* libp2p_noise_handshake(struct Libp2pV2Stream* raw_stream,
 struct Libp2pV2Stream* libp2p_noise_handshake_raw(struct Libp2pV2Stream* raw_stream, void* private_key,
                                                    struct Libp2pPeer* peer,
                                                    const noise_identity_callbacks_t *callbacks);
+
+struct Libp2pV2Stream* libp2p_noise_handshake_responder_raw(struct Libp2pV2Stream* raw_stream, void* private_key,
+                                                             struct Libp2pPeer* peer,
+                                                             const noise_identity_callbacks_t *callbacks);
 
 #endif /* LIBP2P_CONN_NOISE_H */

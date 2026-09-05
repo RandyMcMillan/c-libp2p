@@ -36,7 +36,7 @@ struct MultiAddress* libp2p_multiaddr_new_from_string(const char* str) {
     }
 
     if (ma->ip == NULL || ma->port == 0) {
-        libp2p_logger_error("multiaddr", "Failed to parse multiaddr format\n");
+        libp2p_v2_logger_error("multiaddr", "Failed to parse multiaddr format\n");
         libp2p_multiaddr_free(ma);
         return NULL;
     }

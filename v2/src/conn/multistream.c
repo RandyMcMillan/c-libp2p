@@ -51,7 +51,7 @@ static int read_length_prefixed_msg(struct Libp2pV2Stream* stream, char* buffer,
     } while (byte & 0x80);
 
     if (msg_len >= max_len) {
-        libp2p_logger_error("multistream", "Protocol string exceeds buffer size\n");
+        libp2p_v2_logger_error("multistream", "Protocol string exceeds buffer size\n");
         return 0;
     }
 
@@ -66,23 +66,23 @@ static int read_length_prefixed_msg(struct Libp2pV2Stream* stream, char* buffer,
     return 1;
 }
 
-int libp2p_net_multistream_connect(struct Libp2pV2Stream* stream) {
+int libp2p_v2_net_multistream_connect(struct Libp2pV2Stream* stream) {
     if (stream == NULL)
         return 0;
 
     if (!write_length_prefixed_msg(stream, MULTISTREAM_MSG_HEADER)) {
-        libp2p_logger_error("multistream", "Failed to send multistream header\n");
+        libp2p_v2_logger_error("multistream", "Failed to send multistream header\n");
         return 0;
     }
 
     char response[256];
     if (!read_length_prefixed_msg(stream, response, sizeof(response))) {
-        libp2p_logger_error("multistream", "Failed to receive multistream ack\n");
+        libp2p_v2_logger_error("multistream", "Failed to receive multistream ack\n");
         return 0;
     }
 
     if (strcmp(response, MULTISTREAM_MSG_HEADER) != 0) {
-        libp2p_logger_error("multistream", "Peer rejected multistream version\n");
+        libp2p_v2_logger_error("multistream", "Peer rejected multistream version\n");
         return 0;
     }
 
@@ -104,4 +104,52 @@ int libp2p_net_multistream_negotiate_protocol(struct Libp2pV2Stream* stream, con
         return 0;
 
     return (strcmp(response, formatted_proto) == 0);
+}
+
+int libp2p_net_multistream_accept(struct Libp2pV2Stream* stream, const char* expected_protocol) {
+    if (stream == NULL)
+        return 0;
+
+    char msg[256];
+
+    /* Read and echo multistream header */
+    if (!read_length_prefixed_msg(stream, msg, sizeof(msg))) {
+        libp2p_v2_logger_error("multistream", "Failed to read multistream header\n");
+        return 0;
+    }
+    if (strcmp(msg, MULTISTREAM_MSG_HEADER) != 0) {
+        libp2p_v2_logger_error("multistream", "Unexpected multistream header: %s\n", msg);
+        return 0;
+    }
+    if (!write_length_prefixed_msg(stream, MULTISTREAM_MSG_HEADER)) {
+        libp2p_v2_logger_error("multistream", "Failed to echo multistream header\n");
+        return 0;
+    }
+
+    /* Read protocol proposal */
+    if (!read_length_prefixed_msg(stream, msg, sizeof(msg))) {
+        libp2p_v2_logger_error("multistream", "Failed to read protocol proposal\n");
+        return 0;
+    }
+
+    /* Trim trailing newline for comparison */
+    size_t len = strlen(msg);
+    if (len > 0 && msg[len - 1] == '\n')
+        msg[len - 1] = '\0';
+
+    if (expected_protocol != NULL && strcmp(msg, expected_protocol) != 0) {
+        libp2p_v2_logger_error("multistream", "Unsupported protocol: %s (expected %s)\n", msg, expected_protocol);
+        write_length_prefixed_msg(stream, "na\n");
+        return 0;
+    }
+
+    /* Confirm protocol */
+    char confirm[256];
+    snprintf(confirm, sizeof(confirm), "%s\n", msg);
+    if (!write_length_prefixed_msg(stream, confirm)) {
+        libp2p_v2_logger_error("multistream", "Failed to confirm protocol\n");
+        return 0;
+    }
+
+    return 1;
 }

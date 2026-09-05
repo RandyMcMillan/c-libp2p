@@ -39,7 +39,7 @@ static int add_string_to_array(char*** array, size_t* count, char* item) {
     return 1;
 }
 
-int libp2p_identify_send_response(struct Libp2pV2Stream* stream, struct Peerstore* peerstore) {
+int libp2p_identify_send_response(struct Libp2pV2Stream* stream, struct Libp2pV2Peerstore* peerstore) {
     if (!stream || !peerstore) return 0;
 
     unsigned char buf[4096];
@@ -58,18 +58,29 @@ int libp2p_identify_send_response(struct Libp2pV2Stream* stream, struct Peerstor
         return 0;
     written += bytes;
 
-    /* Field 1: publicKey (optional — skip if not available) */
-    if (peerstore->local_peer_id) {
-        /* TODO: map local_peer_id to raw public key bytes */
-        /* For now, send an empty placeholder so Kubo doesn't reject */
+    /* Field 1: publicKey */
+    if (peerstore->public_key && peerstore->public_key_len > 0) {
+        if (!protobuf_encode_length_delimited(1, WIRETYPE_LENGTH_DELIMITED,
+                                              (const char*)peerstore->public_key, peerstore->public_key_len,
+                                              buf + written, sizeof(buf) - written, &bytes))
+            return 0;
+        written += bytes;
     }
 
-    /* Field 2: listenAddrs (optional) */
-    /* TODO: populate from peerstore or daemon config */
+    /* Field 2: listenAddrs */
+    if (peerstore->listen_addrs) {
+        for (size_t i = 0; i < peerstore->listen_addrs_count; i++) {
+            if (!protobuf_encode_length_delimited(2, WIRETYPE_LENGTH_DELIMITED,
+                                                  peerstore->listen_addrs[i], strlen(peerstore->listen_addrs[i]),
+                                                  buf + written, sizeof(buf) - written, &bytes))
+                return 0;
+            written += bytes;
+        }
+    }
 
     ssize_t ret = stream->write(stream, buf, written);
     if (ret != (ssize_t)written) {
-        libp2p_logger_error("identify", "Failed to write Identify response\n");
+        libp2p_v2_logger_error("identify", "Failed to write Identify response\n");
         return 0;
     }
 
@@ -91,7 +102,7 @@ int libp2p_identify_receive(struct Libp2pV2Stream* stream, struct Libp2pPeer* pe
     }
 
     if (total == 0) {
-        libp2p_logger_error("identify", "No data received on identify stream\n");
+        libp2p_v2_logger_error("identify", "No data received on identify stream\n");
         return 0;
     }
 
@@ -188,7 +199,7 @@ int libp2p_identify_receive(struct Libp2pV2Stream* stream, struct Libp2pPeer* pe
     }
 
     if (success) {
-        libp2p_logger_info("identify", "Received identify from peer: agent=%s proto=%s\n",
+        libp2p_v2_logger_info("identify", "Received identify from peer: agent=%s proto=%s\n",
                            info->agent_version ? info->agent_version : "?",
                            info->protocol_version ? info->protocol_version : "?");
         /* TODO: populate peer->peer_id from public_key, add listen_addrs to peer */

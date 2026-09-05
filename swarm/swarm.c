@@ -4,6 +4,7 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <stdlib.h>
+#include <unistd.h>
 
 #include "libp2p/net/protocol.h"
 #include "libp2p/net/connectionstream.h"
@@ -76,6 +77,10 @@ void libp2p_swarm_listen(void* ctx) {
 			libp2p_logger_debug("swarm", "listen: Exiting loop due to retVal being %d.\n", retVal);
 			break;
 		}
+		if (retVal == 0) {
+			// Nothing to read; brief backoff to prevent tight spin
+			usleep(50000);
+		}
 	} // end of loop
 
 	// clean up memory
@@ -96,7 +101,6 @@ int libp2p_swarm_add_peer(struct SwarmContext* context, struct Libp2pPeer* peer)
     struct SwarmSession* swarm_session = (struct SwarmSession*) malloc(sizeof(struct SwarmSession));
     swarm_session->session_context = peer->sessionContext;
     swarm_session->swarm_context = context;
-
     if (thpool_add_work(context->thread_pool, libp2p_swarm_listen, swarm_session) < 0) {
     	libp2p_logger_error("swarm", "Unable to fire up thread for peer %s\n", libp2p_peer_id_to_string(peer));
     	return 0;
@@ -166,7 +170,7 @@ int libp2p_swarm_add_connection(struct SwarmContext* context, int file_descripto
 struct SwarmContext* libp2p_swarm_new(struct Libp2pVector* protocol_handlers, struct Datastore* datastore, struct Filestore* filestore) {
 	struct SwarmContext* context = (struct SwarmContext*) malloc(sizeof(struct SwarmContext));
 	if (context != NULL) {
-		context->thread_pool = thpool_init(25);
+		context->thread_pool = thpool_init(1);
 		context->protocol_handlers = protocol_handlers;
 		context->datastore = datastore;
 		context->filestore = filestore;

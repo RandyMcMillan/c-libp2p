@@ -509,3 +509,27 @@ ssize_t yamux_stream_process(struct yamux_stream* stream, struct yamux_frame* fr
     return 0;
 }
 
+/* Stubs for libp2p_yamux_stream_* wrappers used by transport/swarm_dialer_v2_bridge.c */
+
+void libp2p_yamux_stream_close(struct Stream* stream) {
+    if (stream && stream->stream_context) {
+        (void)yamux_stream_close(stream->stream_context);
+    }
+}
+
+int libp2p_yamux_stream_write(struct Stream* stream, const uint8_t* buf, size_t len) {
+    struct YamuxChannelContext* ctx = libp2p_yamux_get_channel_context(stream->stream_context);
+    if (!ctx)
+        return -1;
+    ssize_t ret = yamux_stream_write(ctx, (uint32_t)len, (void*)buf);
+    return (ret < 0) ? (int)ret : (int)ret;
+}
+
+int libp2p_yamux_stream_read(struct Stream* stream, uint8_t* buf, size_t max_len) {
+    struct YamuxChannelContext* ctx = libp2p_yamux_get_channel_context(stream->stream_context);
+    if (!ctx || !ctx->buffer)
+        return -1;
+    size_t ret = threadsafe_buffer_read(ctx->buffer, buf, max_len);
+    return (int)ret;
+}
+

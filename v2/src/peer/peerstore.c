@@ -5,10 +5,10 @@
 #include "libp2p/peer/peerstore.h"
 #include "libp2p/utils/logger.h"
 
-struct Peerstore* libp2p_peerstore_new(const char* local_peer_id) {
-    struct Peerstore* ps = (struct Peerstore*)malloc(sizeof(struct Peerstore));
+struct Libp2pV2Peerstore* libp2p_v2_peerstore_new(const char* local_peer_id) {
+    struct Libp2pV2Peerstore* ps = (struct Libp2pV2Peerstore*)malloc(sizeof(struct Libp2pV2Peerstore));
     if (ps != NULL) {
-        memset(ps, 0, sizeof(struct Peerstore));
+        memset(ps, 0, sizeof(struct Libp2pV2Peerstore));
         if (local_peer_id != NULL) {
             ps->local_peer_id = strdup(local_peer_id);
         }
@@ -17,7 +17,7 @@ struct Peerstore* libp2p_peerstore_new(const char* local_peer_id) {
     return ps;
 }
 
-int libp2p_peerstore_add_peer(struct Peerstore* peerstore, struct Libp2pPeer* peer) {
+int libp2p_v2_peerstore_add_peer(struct Libp2pV2Peerstore* peerstore, struct Libp2pPeer* peer) {
     if (peerstore == NULL || peer == NULL)
         return 0;
 
@@ -43,7 +43,7 @@ int libp2p_peerstore_add_peer(struct Peerstore* peerstore, struct Libp2pPeer* pe
     return 1;
 }
 
-struct Libp2pPeer* libp2p_peerstore_get_peer(struct Peerstore* peerstore, const char* peer_id) {
+struct Libp2pPeer* libp2p_v2_peerstore_get_peer(struct Libp2pV2Peerstore* peerstore, const char* peer_id) {
     if (peerstore == NULL || peer_id == NULL)
         return NULL;
 
@@ -59,17 +59,17 @@ struct Libp2pPeer* libp2p_peerstore_get_peer(struct Peerstore* peerstore, const 
     return NULL;
 }
 
-int libp2p_peerstore_add_address(struct Peerstore* peerstore, const char* peer_id, struct MultiAddress* ma) {
+int libp2p_v2_peerstore_add_address(struct Libp2pV2Peerstore* peerstore, const char* peer_id, struct MultiAddress* ma) {
     if (peerstore == NULL || peer_id == NULL || ma == NULL)
         return 0;
 
-    struct Libp2pPeer* peer = libp2p_peerstore_get_peer(peerstore, peer_id);
+    struct Libp2pPeer* peer = libp2p_v2_peerstore_get_peer(peerstore, peer_id);
     if (peer == NULL) {
         peer = (struct Libp2pPeer*)calloc(1, sizeof(struct Libp2pPeer));
         if (peer == NULL)
             return 0;
         peer->peer_id = strdup(peer_id);
-        libp2p_peerstore_add_peer(peerstore, peer);
+        libp2p_v2_peerstore_add_peer(peerstore, peer);
     }
 
     struct Libp2pLinkedList* new_node = (struct Libp2pLinkedList*)malloc(sizeof(struct Libp2pLinkedList));
@@ -83,12 +83,23 @@ int libp2p_peerstore_add_address(struct Peerstore* peerstore, const char* peer_i
     return 1;
 }
 
-void libp2p_peerstore_free(struct Peerstore* peerstore) {
+void libp2p_v2_peerstore_free(struct Libp2pV2Peerstore* peerstore) {
     if (peerstore == NULL)
         return;
 
     if (peerstore->local_peer_id != NULL) {
         free(peerstore->local_peer_id);
+    }
+
+    if (peerstore->public_key != NULL) {
+        free(peerstore->public_key);
+    }
+
+    if (peerstore->listen_addrs != NULL) {
+        for (size_t i = 0; i < peerstore->listen_addrs_count; i++) {
+            free(peerstore->listen_addrs[i]);
+        }
+        free(peerstore->listen_addrs);
     }
 
     struct PeerEntry* current = peerstore->head;

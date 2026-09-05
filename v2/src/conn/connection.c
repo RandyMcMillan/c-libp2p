@@ -10,7 +10,7 @@ struct Connection {
     int socket_fd;
 };
 
-struct Connection* libp2p_conn_connection_new(void* transport_dialer, struct MultiAddress* multiaddress) {
+struct Connection* libp2p_v2_conn_connection_new(void* transport_dialer, struct MultiAddress* multiaddress) {
     struct Connection* out = NULL;
 
     if (transport_dialer != NULL && multiaddress != NULL) {
@@ -25,7 +25,7 @@ struct Connection* libp2p_conn_connection_new(void* transport_dialer, struct Mul
     return out;
 }
 
-void libp2p_conn_connection_free(struct Connection* connection) {
+void libp2p_v2_conn_connection_free(struct Connection* connection) {
     if (connection != NULL) {
         if (connection->socket_fd >= 0) {
             close(connection->socket_fd);

@@ -15,21 +15,21 @@ static void log_message(const char* level, const char* subsystem, const char* fo
     printf("\n");
 }
 
-void libp2p_logger_info(const char* subsystem, const char* format, ...) {
+void libp2p_v2_logger_info(const char* subsystem, const char* format, ...) {
     va_list args;
     va_start(args, format);
     log_message("INFO", subsystem, format, args);
     va_end(args);
 }
 
-void libp2p_logger_error(const char* subsystem, const char* format, ...) {
+void libp2p_v2_logger_error(const char* subsystem, const char* format, ...) {
     va_list args;
     va_start(args, format);
     log_message("ERROR", subsystem, format, args);
     va_end(args);
 }
 
-void libp2p_logger_debug(const char* subsystem, const char* format, ...) {
+void libp2p_v2_logger_debug(const char* subsystem, const char* format, ...) {
     va_list args;
     va_start(args, format);
     log_message("DEBUG", subsystem, format, args);

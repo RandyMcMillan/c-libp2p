@@ -104,6 +104,14 @@ struct Libp2pPeer* libp2p_peerstore_get_or_add_peer(struct Peerstore* peerstore,
 struct Libp2pPeer* libp2p_peerstore_get_or_add_peer_by_id(struct Peerstore* peerstore, const unsigned char* peer_id, size_t peer_id_size);
 
 /**
+ * Update addresses of an existing peer from an incoming peer
+ * @param existing the peer to update
+ * @param incoming the peer with new addresses
+ * @returns true(1) on success
+ */
+int libp2p_peerstore_update_addresses(struct Libp2pPeer* existing, const struct Libp2pPeer* incoming);
+
+/**
  * Update the max socket fd
  * @param peerstore the Peerstore
  * @param newVal the new val (will be added if > oldVal)

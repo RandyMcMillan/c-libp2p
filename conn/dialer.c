@@ -16,6 +16,7 @@
 #include "libp2p/secio/secio.h"
 #include "libp2p/yamux/yamux.h"
 #include "libp2p/identify/identify.h"
+#include "libp2p/peer/peerstore.h"
 
 struct TransportDialer* libp2p_conn_tcp_transport_dialer_new(char* peer_id, struct RsaPrivateKey* private_key);
 
@@ -118,61 +119,77 @@ int libp2p_conn_dialer_join_swarm(const struct Dialer* dialer, struct Libp2pPeer
 		}
 		current_entry = current_entry->next;
 	}
-	if (conn_stream == NULL)
+	if (conn_stream == NULL) {
 		return 0;
+	}
 	// we're connected. start listening for responses
 	libp2p_swarm_add_peer(dialer->swarm, peer);
+	// Negotiate multistream on the raw TCP connection
+	struct Stream* multistream = libp2p_net_multistream_stream_new(conn_stream, 0);
+	if (multistream == NULL) {
+		libp2p_logger_error("dialer", "Multistream negotiation failed.\n");
+		return 0;
+	}
 	// wait for multistream
 	if (!libp2p_net_multistream_ready(peer->sessionContext, 5)) {
 		return 0;
 	}
 	struct Stream* new_stream = peer->sessionContext->default_stream;
 	if (new_stream != NULL) {
-		// secio over multistream
-		struct Stream* secio_stream = libp2p_secio_stream_new(new_stream, dialer->peerstore, dialer->private_key);
-		if (secio_stream != NULL && libp2p_secio_ready(peer->sessionContext, 10)) {
-			new_stream = secio_stream;
-			libp2p_logger_debug("dialer", "We successfully negotiated secio.\n");
-		} else {
-			// Noise fallback: try /noise before giving up
-			new_stream = NULL;
-			if (dialer->noise_handshake != NULL) {
-				struct StreamMessage noise_msg;
-				noise_msg.data = (uint8_t*)"/noise\n";
-				noise_msg.data_size = 7;
-				if (peer->sessionContext->default_stream->write(peer->sessionContext->default_stream->stream_context, &noise_msg)) {
-					struct StreamMessage* resp = NULL;
-					if (peer->sessionContext->default_stream->read(peer->sessionContext->default_stream->stream_context, &resp, 5) && resp != NULL) {
-						if (strncmp((char*)resp->data, "/noise\n", 7) == 0) {
-							/* Use the raw TCP stream for Noise to avoid multistream framing corrupting the 2-byte BE length prefixes. */
-								struct Stream* noise_stream = dialer->noise_handshake(peer->sessionContext->insecure_stream, dialer->private_key);
-							if (noise_stream != NULL) {
-								new_stream = noise_stream;
-								peer->sessionContext->default_stream = noise_stream;
-								libp2p_logger_debug("dialer", "We successfully negotiated noise.\n");
-							}
+		// Skip secio (not supported by Kubo v0.43.0), go straight to Noise
+		new_stream = NULL;
+		if (dialer->noise_handshake != NULL) {
+			struct StreamMessage noise_msg;
+			noise_msg.data = (uint8_t*)"/noise\n";
+			noise_msg.data_size = 7;
+			struct Stream* root_stream = peer->sessionContext->default_stream;
+			while (root_stream->parent_stream != NULL) root_stream = root_stream->parent_stream;
+			pthread_mutex_lock(root_stream->socket_mutex);
+			if (peer->sessionContext->default_stream->write(peer->sessionContext->default_stream->stream_context, &noise_msg)) {
+				struct StreamMessage* resp = NULL;
+				if (peer->sessionContext->default_stream->read(peer->sessionContext->default_stream->stream_context, &resp, 5) && resp != NULL) {
+					if (strncmp((char*)resp->data, "/noise\n", 7) == 0) {
+						/* Use the raw TCP stream for Noise to avoid multistream framing corrupting the 2-byte BE length prefixes. */
+						struct Stream* noise_stream = dialer->noise_handshake(peer->sessionContext->insecure_stream, dialer->private_key);
+						if (noise_stream != NULL) {
+							new_stream = noise_stream;
+							peer->sessionContext->default_stream = noise_stream;
+							libp2p_logger_debug("dialer", "We successfully negotiated noise.\n");
 						}
 					}
 				}
 			}
-			if (new_stream == NULL) {
-				libp2p_logger_error("dialer", "Unable to do secio or noise negotiation.\n");
-				return 0;
-			}
+			pthread_mutex_unlock(root_stream->socket_mutex);
 		}
-		// multistream over secure transport (secio or noise)
-		// Don't bother, as the other side requests multistream
-		if (!libp2p_net_multistream_ready(peer->sessionContext, 5))
+		if (new_stream == NULL) {
+			libp2p_logger_error("dialer", "Unable to do noise negotiation.\n");
 			return 0;
-		libp2p_logger_debug("dialer", "We successfully negotiated multistream over secure transport.\n");
+		}
+		// multistream over noise
+		libp2p_logger_error("dialer", "DEBUG: about to create multistream over noise\n");
+		struct Stream* ms_over_noise = libp2p_net_multistream_stream_new(new_stream, 0);
+		if (ms_over_noise == NULL) {
+			libp2p_logger_error("dialer", "Unable to negotiate multistream over noise.\n");
+			return 0;
+		}
+		libp2p_logger_error("dialer", "DEBUG: multistream over noise created, waiting for ready\n");
+		// wait for multistream-over-noise ack before proceeding to yamux
+		// (use a longer timeout because the swarm thread read may block for
+		// up to 10 seconds via the v2 raw stream wrapper)
+		if (!libp2p_net_multistream_ready(peer->sessionContext, 15)) {
+			libp2p_logger_error("dialer", "Multistream over noise not ready.\n");
+			return 0;
+		}
+		libp2p_logger_error("dialer", "DEBUG: multistream over noise ready, about to create yamux\n");
 		// yamux over multistream
 		new_stream = libp2p_yamux_stream_new(peer->sessionContext->default_stream, 0, dialer->swarm->protocol_handlers);
 		if (new_stream != NULL) {
+			libp2p_logger_error("dialer", "DEBUG: yamux created, waiting for ready\n");
 			if (!libp2p_yamux_stream_ready(peer->sessionContext, 5)) {
 				libp2p_logger_error("dialer", "Unable to get yamux into the ready status.\n");
 				return 0;
 			}
-			libp2p_logger_debug("dialer", "We successfully negotiated yamux.\n");
+			libp2p_logger_error("dialer", "DEBUG: yamux ready\n");
 			// the rest should be done on another thread
 			// we have our swarm connection. Now we ask for some "channels"
 			// id over multistream over yamux
@@ -201,6 +218,19 @@ int libp2p_conn_dialer_join_swarm(const struct Dialer* dialer, struct Libp2pPeer
 			//libp2p_yamux_stream_add(new_stream->stream_context, libp2p_kademlia_stream_new(new_stream));
 			// circuit relay over yamux
 			//libp2p_yamux_stream_add(new_stream->stream_context, libp2p_circuit_relay_stream_new(new_stream));
+			peer->connection_type = CONNECTION_TYPE_CONNECTED;
+			if (dialer->peerstore != NULL && peer->id != NULL && peer->id_size > 0) {
+				struct Libp2pPeer* stored = libp2p_peerstore_get_peer(dialer->peerstore, (unsigned char*)peer->id, peer->id_size);
+				if (stored != NULL) {
+					if (stored->sessionContext != NULL && stored->sessionContext != peer->sessionContext)
+						libp2p_session_context_free(stored->sessionContext);
+					stored->sessionContext = peer->sessionContext;
+					stored->connection_type = CONNECTION_TYPE_CONNECTED;
+					libp2p_peerstore_update_addresses(stored, peer);
+				} else {
+					libp2p_peerstore_add_peer(dialer->peerstore, peer);
+				}
+			}
 			return 1;
 		} else {
 			libp2p_logger_error("dialer", "Unable to do yamux negotiation.\n");

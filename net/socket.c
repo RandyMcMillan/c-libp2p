@@ -149,18 +149,37 @@ int socket_connect4_with_timeout(int s, uint32_t ip, uint16_t port, int timeout_
 
    // connect
    int retVal = connect(s, (struct sockaddr *) &sa, sizeof sa);
-   int tried_secs = 0;
-   while (retVal == -1 && errno == EINPROGRESS && tried_secs < timeout_secs) {
-	   libp2p_logger_debug("socket", "Socket connect unsuccessful. Waiting to try again.\n");
-	   // wait for timeout
-	   sleep(1);
-	   tried_secs++;
-	   retVal = connect(s, (struct sockaddr *) &sa, sizeof sa);
-	   if (retVal == -1 && errno == EALREADY) {
-		   libp2p_logger_debug("socket", "Socket connect completed.\n");
-		   retVal = 0;
-		   break;
+   if (retVal == -1 && errno == EINPROGRESS) {
+	   // wait for the socket to become writable using select
+	   fd_set wfds;
+	   struct timeval tv;
+	   int tried_secs = 0;
+	   while (tried_secs < timeout_secs) {
+		   FD_ZERO(&wfds);
+		   FD_SET(s, &wfds);
+		   tv.tv_sec = 1;
+		   tv.tv_usec = 0;
+		   retVal = select(s + 1, NULL, &wfds, NULL, &tv);
+		   if (retVal > 0 && FD_ISSET(s, &wfds)) {
+			   // connection attempt finished; check result
+			   int so_error = 0;
+			   socklen_t len = sizeof(so_error);
+			   if (getsockopt(s, SOL_SOCKET, SO_ERROR, &so_error, &len) == 0 && so_error == 0) {
+				   retVal = 0;
+				   break;
+			   }
+			   // real failure
+			   errno = so_error;
+			   retVal = -1;
+			   break;
+		   } else if (retVal == -1 && errno != EINTR) {
+			   break;
+		   }
+		   tried_secs++;
 	   }
+   } else if (retVal == -1 && errno == EISCONN) {
+	   // already connected
+	   retVal = 0;
    }
 
    if (retVal == -1) {

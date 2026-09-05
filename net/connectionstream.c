@@ -236,7 +236,8 @@ struct Stream* libp2p_net_connection_new(int fd, char* ip, int port, struct Sess
 	struct Stream* out = libp2p_net_connection_established(fd, ip, port, session_context);
 	if (out != NULL) {
 		struct ConnectionContext* ctx = (struct ConnectionContext*) out->stream_context;
-		if (!socket_connect4_with_timeout(ctx->socket_descriptor, hostname_to_ip(ip), port, 10) == 0) {
+		int connect_ret = socket_connect4_with_timeout(ctx->socket_descriptor, hostname_to_ip(ip), port, 10);
+		if (!connect_ret == 0) {
 			// unable to connect
 			libp2p_stream_free(out);
 			out = NULL;

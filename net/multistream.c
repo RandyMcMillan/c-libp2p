@@ -266,7 +266,8 @@ int libp2p_net_multistream_read(void* stream_context, struct StreamMessage** res
 	size_t num_bytes_requested = 0;
 	size_t varint_length = 0;
 	for(int i = 0; i < 12; i++) {
-		if (parent_stream->read_raw(parent_stream->stream_context, &varint[i], 1, timeout_secs) == -1) {
+		int rr = parent_stream->read_raw(parent_stream->stream_context, &varint[i], 1, timeout_secs);
+		if (rr == -1) {
 			libp2p_logger_debug("multistream", "read->read_raw returned false.\n");
 			return 0;
 		}
@@ -276,8 +277,9 @@ int libp2p_net_multistream_read(void* stream_context, struct StreamMessage** res
 		}
 	}
 
-	if (num_bytes_requested <= 0)
+	if (num_bytes_requested <= 0) {
 		return 0;
+	}
 
 	// now get the data
 	*results = libp2p_stream_message_new();
@@ -298,7 +300,6 @@ int libp2p_net_multistream_read(void* stream_context, struct StreamMessage** res
 		*results = NULL;
 		return 0;
 	}
-
 	return 1;
 }
 
@@ -477,7 +478,7 @@ struct Stream* libp2p_net_multistream_stream_new(struct Stream* parent_stream, i
 		if (!theyRequested) {
 			int timeout = 5;
 			int counter = 0;
-			// wait for the response
+			// wait for the response (swarm thread will read and update status)
 			while(ctx->status != multistream_status_ack && counter < timeout) {
 				sleep(1);
 				counter++;

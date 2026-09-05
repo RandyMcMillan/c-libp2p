@@ -12,7 +12,11 @@
 
 #include "libp2p/conn/noise.h"
 #include "libp2p/conn/multistream.h"
+#include "libp2p/crypto/key.h"
+#include "libp2p/crypto/peerutils.h"
+#include "libp2p/peer/peer.h"
 #include "protobuf.h"
+#include "varint.h"
 #include "libp2p/utils/logger.h"
 
 #define NOISE_PROTOCOL_ID "/noise"
@@ -25,6 +29,14 @@
 #define NOISE_NONCE_LEN 12
 #define NOISE_HASHLEN 32
 #define NOISE_DHLEN 32
+
+static void noise_hexdump(const char* label, const unsigned char* data, size_t len) {
+    fprintf(stderr, "[NOISE] %s (%zu bytes): ", label, len);
+    for (size_t i = 0; i < len; i++) {
+        fprintf(stderr, "%02x", data[i]);
+    }
+    fprintf(stderr, "\n");
+}
 
 struct NoiseStreamContext {
     struct Libp2pV2Stream* raw_stream;
@@ -249,8 +261,12 @@ static void noise_stream_close(struct Libp2pV2Stream* stream) {
     if (!stream) return;
     struct NoiseStreamContext* ctx = (struct NoiseStreamContext*)stream->stream_context;
     if (ctx) {
-        if (ctx->raw_stream)
+        if (ctx->raw_stream) {
             ctx->raw_stream->close(ctx->raw_stream);
+            if (ctx->raw_stream->stream_context)
+                free(ctx->raw_stream->stream_context);
+            free(ctx->raw_stream);
+        }
         free(ctx);
         stream->stream_context = NULL;
     }
@@ -385,26 +401,24 @@ static int noise_payload_decode(const uint8_t *in, size_t in_len,
         if (field_type != WIRETYPE_LENGTH_DELIMITED)
             return 0;
 
-        size_t val_len = 0;
-        char *tmp = NULL;
-        if (!protobuf_decode_string(in + pos, in_len - pos, &tmp, &val_len))
+        size_t varint_len = 0;
+        unsigned long long data_len = varint_decode(in + pos, (int)(in_len - pos), &varint_len);
+        if (varint_len == 0 || pos + varint_len + data_len > in_len)
             return 0;
-        /* protobuf_decode_string allocates; we just need the length, then free */
-        free(tmp);
 
         switch (field_no) {
             case 1:
-                *out_key = in + pos;
-                *out_key_len = val_len;
+                *out_key = in + pos + varint_len;
+                *out_key_len = data_len;
                 break;
             case 2:
-                *out_sig = in + pos;
-                *out_sig_len = val_len;
+                *out_sig = in + pos + varint_len;
+                *out_sig_len = data_len;
                 break;
             default:
                 break;
         }
-        pos += val_len;
+        pos += varint_len + data_len;
     }
     return 1;
 }
@@ -414,28 +428,58 @@ static int noise_write_frame(struct Libp2pV2Stream* stream, const unsigned char*
     unsigned char header[2];
     header[0] = (len >> 8) & 0xFF;
     header[1] = len & 0xFF;
-    if (stream->write(stream, header, 2) != 2)
+    ssize_t w1 = stream->write(stream, header, 2);
+    if (w1 != 2) {
+        fprintf(stderr, "[NOISE] noise_write_frame: write header returned %zd\n", w1);
         return 0;
-    if (stream->write(stream, data, len) != (ssize_t)len)
+    }
+    ssize_t w2 = stream->write(stream, data, len);
+    if (w2 != (ssize_t)len) {
+        fprintf(stderr, "[NOISE] noise_write_frame: write payload returned %zd (expected %zu)\n", w2, len);
         return 0;
+    }
+    fprintf(stderr, "[NOISE] noise_write_frame: wrote %zu bytes\n", len);
     return 1;
 }
 
 static int noise_read_frame(struct Libp2pV2Stream* stream, unsigned char* buf, size_t max_len, size_t* out_len) {
     unsigned char header[2];
-    if (stream->read(stream, header, 2) != 2)
+    ssize_t ret = stream->read(stream, header, 2);
+    if (ret != 2) {
+        fprintf(stderr, "[NOISE] noise_read_frame: read header returned %zd\n", ret);
         return 0;
+    }
     size_t len = (header[0] << 8) | header[1];
+    fprintf(stderr, "[NOISE] noise_read_frame: header bytes=0x%02x 0x%02x payload len=%zu\n", header[0], header[1], len);
     if (len > max_len)
         return 0;
     size_t total = 0;
     while (total < len) {
         ssize_t ret = stream->read(stream, buf + total, len - total);
-        if (ret <= 0)
+        if (ret <= 0) {
+            fprintf(stderr, "[NOISE] noise_read_frame: read payload returned %zd (total=%zu, len=%zu)\n", ret, total, len);
             return 0;
+        }
         total += ret;
     }
     *out_len = len;
+    return 1;
+}
+
+static int noise_peer_id_from_identity_key(const uint8_t* id_key, size_t id_key_len,
+                                            struct Libp2pPeer* peer) {
+    if (!id_key || id_key_len == 0 || !peer)
+        return 0;
+    struct PublicKey* pubkey = NULL;
+    if (!libp2p_crypto_public_key_protobuf_decode((unsigned char*)id_key, id_key_len, &pubkey))
+        return 0;
+    char* peer_id = NULL;
+    int ret = libp2p_crypto_public_key_to_peer_id(pubkey, &peer_id);
+    libp2p_crypto_public_key_free(pubkey);
+    if (!ret || !peer_id)
+        return 0;
+    peer->id = peer_id;
+    peer->id_size = strlen(peer_id);
     return 1;
 }
 
@@ -462,7 +506,13 @@ struct Libp2pV2Stream* libp2p_noise_handshake_raw(struct Libp2pV2Stream* raw_str
     memset(temp_k, 0, NOISE_HASHLEN);
 
     const char* protocol_name = "Noise_XX_25519_ChaChaPoly_SHA256";
-    SHA256((const unsigned char*)protocol_name, strlen(protocol_name), h);
+    size_t protocol_name_len = strlen(protocol_name);
+    if (protocol_name_len <= NOISE_HASHLEN) {
+        memcpy(h, protocol_name, protocol_name_len);
+        memset(h + protocol_name_len, 0, NOISE_HASHLEN - protocol_name_len);
+    } else {
+        SHA256((const unsigned char*)protocol_name, protocol_name_len, h);
+    }
     memcpy(ck, h, NOISE_HASHLEN);
 
     const char* prologue = "";
@@ -473,23 +523,259 @@ struct Libp2pV2Stream* libp2p_noise_handshake_raw(struct Libp2pV2Stream* raw_str
     SHA256_Final(h, &sha);
 
     /* ---- Message 1: e ---- */
+    fprintf(stderr, "[NOISE] Generating ephemeral keypair...\n");
     if (!noise_x25519_generate(e_private, e_public))
         return NULL;
     noise_mix_hash(h, e_public, NOISE_DHLEN);
-    if (!noise_write_frame(raw_stream, e_public, NOISE_DHLEN))
+    fprintf(stderr, "[NOISE] Writing Message 1 (e_public, %d bytes)...\n", NOISE_DHLEN);
+    if (!noise_write_frame(raw_stream, e_public, NOISE_DHLEN)) {
+        fprintf(stderr, "[NOISE] Failed to write Message 1\n");
         return NULL;
+    }
+    noise_mix_hash(h, (unsigned char*)"", 0);
 
-    /* ---- Read remote Message 1: e ---- */
-    size_t frame_len = 0;
-    if (!noise_read_frame(raw_stream, re_public, NOISE_DHLEN, &frame_len) || frame_len != NOISE_DHLEN)
+    /* ---- Read remote Message 1: e, s, payload (responder's single message) ---- */
+    fprintf(stderr, "[NOISE] Reading responder's message (e + s + payload)...\n");
+    unsigned char remote_msg[4096];
+    size_t remote_msg_len = 0;
+    if (!noise_read_frame(raw_stream, remote_msg, sizeof(remote_msg), &remote_msg_len)) {
+        fprintf(stderr, "[NOISE] Failed to read responder's message (len=%zu)\n", remote_msg_len);
         return NULL;
+    }
+    fprintf(stderr, "[NOISE] Responder's message len=%zu\n", remote_msg_len);
+    if (remote_msg_len < NOISE_DHLEN) {
+        fprintf(stderr, "[NOISE] Responder's message too short for e\n");
+        return NULL;
+    }
+    memcpy(re_public, remote_msg, NOISE_DHLEN);
     noise_mix_hash(h, re_public, NOISE_DHLEN);
 
     if (!noise_x25519_dh(e_private, re_public, dh_result))
         return NULL;
     noise_mix_key(ck, temp_k, dh_result, NOISE_DHLEN);
 
-    /* ---- Message 2: s, payload ---- */
+    noise_hexdump("h after ee", h, NOISE_HASHLEN);
+    noise_hexdump("ck after ee", ck, NOISE_HASHLEN);
+    noise_hexdump("temp_k after ee", temp_k, NOISE_KEYLEN);
+    noise_hexdump("e_private", e_private, NOISE_DHLEN);
+    noise_hexdump("e_public", e_public, NOISE_DHLEN);
+    noise_hexdump("re_public", re_public, NOISE_DHLEN);
+    noise_hexdump("dh_result (ee)", dh_result, NOISE_DHLEN);
+
+    size_t offset = NOISE_DHLEN;
+    if (remote_msg_len < offset + NOISE_DHLEN + NOISE_TAGLEN) {
+        fprintf(stderr, "[NOISE] Responder's message too short for encrypted s\n");
+        return NULL;
+    }
+    unsigned char remote_encrypted_s[NOISE_DHLEN + NOISE_TAGLEN];
+    memcpy(remote_encrypted_s, remote_msg + offset, NOISE_DHLEN + NOISE_TAGLEN);
+    offset += NOISE_DHLEN + NOISE_TAGLEN;
+
+    noise_hexdump("remote_encrypted_s", remote_encrypted_s, NOISE_DHLEN + NOISE_TAGLEN);
+
+    unsigned char remote_s_public[NOISE_DHLEN];
+    fprintf(stderr, "[NOISE] Decrypting responder's s (nonce=0)...\n");
+    if (!noise_decrypt(temp_k, 0, h, NOISE_HASHLEN, remote_encrypted_s, NOISE_DHLEN + NOISE_TAGLEN, remote_s_public)) {
+        fprintf(stderr, "[NOISE] Failed to decrypt responder's s\n");
+        return NULL;
+    }
+    fprintf(stderr, "[NOISE] Decrypted responder's s successfully\n");
+    noise_mix_hash(h, remote_encrypted_s, NOISE_DHLEN + NOISE_TAGLEN);
+
+    if (!noise_x25519_dh(e_private, remote_s_public, dh_result))
+        return NULL;
+    noise_mix_key(ck, temp_k, dh_result, NOISE_DHLEN);
+
+    size_t remote_payload_frame_len = remote_msg_len - offset;
+    fprintf(stderr, "[NOISE] Responder's payload frame len=%zu\n", remote_payload_frame_len);
+    unsigned char remote_encrypted_payload[NOISE_TAGLEN + 2048];
+    if (remote_payload_frame_len > sizeof(remote_encrypted_payload)) {
+        fprintf(stderr, "[NOISE] Responder's payload too large (%zu)\n", remote_payload_frame_len);
+        return NULL;
+    }
+    memcpy(remote_encrypted_payload, remote_msg + offset, remote_payload_frame_len);
+
+    unsigned char remote_payload[2048];
+    size_t remote_payload_len = 0;
+    if (remote_payload_frame_len >= NOISE_TAGLEN) {
+        remote_payload_len = remote_payload_frame_len - NOISE_TAGLEN;
+        fprintf(stderr, "[NOISE] Decrypting responder's payload (nonce=0, len=%zu)...\n", remote_payload_frame_len);
+        if (!noise_decrypt(temp_k, 0, h, NOISE_HASHLEN, remote_encrypted_payload, remote_payload_frame_len, remote_payload)) {
+            fprintf(stderr, "[NOISE] Failed to decrypt responder's payload\n");
+            return NULL;
+        }
+        fprintf(stderr, "[NOISE] Decrypted responder's payload successfully (plaintext len=%zu)\n", remote_payload_len);
+        noise_mix_hash(h, remote_encrypted_payload, remote_payload_frame_len);
+
+        if (callbacks && callbacks->verify) {
+            const uint8_t *r_id_key = NULL, *r_id_sig = NULL;
+            size_t r_id_key_len = 0, r_id_sig_len = 0;
+            if (noise_payload_decode(remote_payload, remote_payload_len,
+                                     &r_id_key, &r_id_key_len,
+                                     &r_id_sig, &r_id_sig_len)) {
+                if (r_id_key && r_id_sig) {
+                    if (!callbacks->verify(r_id_key, r_id_key_len,
+                                           remote_s_public, NOISE_DHLEN,
+                                           r_id_sig, r_id_sig_len)) {
+                        libp2p_v2_logger_error("noise", "Remote identity signature verification failed\n");
+                        return NULL;
+                    }
+                    if (peer != NULL && noise_peer_id_from_identity_key(r_id_key, r_id_key_len, peer)) {
+                        libp2p_v2_logger_info("noise", "Derived peer id from remote identity key: %s\n", peer->id);
+                    }
+                }
+            }
+        }
+    } else {
+        noise_mix_hash(h, remote_encrypted_payload, remote_payload_frame_len);
+    }
+
+    /* ---- Message 2: s, payload (initiator's final message, single frame) ---- */
+    fprintf(stderr, "[NOISE] Generating static keypair...\n");
+    if (!noise_x25519_generate(s_private, s_public)) {
+        fprintf(stderr, "[NOISE] Failed to generate static keypair\n");
+        return NULL;
+    }
+
+    unsigned char encrypted_s[NOISE_DHLEN + NOISE_TAGLEN];
+    fprintf(stderr, "[NOISE] Encrypting static key...\n");
+    if (!noise_encrypt(temp_k, 0, h, NOISE_HASHLEN, s_public, NOISE_DHLEN, encrypted_s)) {
+        fprintf(stderr, "[NOISE] Failed to encrypt static key\n");
+        return NULL;
+    }
+    noise_mix_hash(h, encrypted_s, NOISE_DHLEN + NOISE_TAGLEN);
+
+    fprintf(stderr, "[NOISE] Computing static DH (se)...\n");
+    if (!noise_x25519_dh(s_private, re_public, dh_result)) {
+        fprintf(stderr, "[NOISE] Failed to compute static DH\n");
+        return NULL;
+    }
+    noise_mix_key(ck, temp_k, dh_result, NOISE_DHLEN);
+
+    /* Build identity payload */
+    uint8_t payload[1024];
+    size_t payload_len = 0;
+    if (callbacks && callbacks->get_identity_key && callbacks->sign) {
+        uint8_t *identity_key = NULL;
+        size_t identity_key_len = 0;
+        uint8_t *identity_sig = NULL;
+        size_t identity_sig_len = 0;
+        if (callbacks->get_identity_key(private_key, &identity_key, &identity_key_len) &&
+            callbacks->sign(private_key, s_public, NOISE_DHLEN, &identity_sig, &identity_sig_len)) {
+            noise_payload_encode(identity_key, identity_key_len,
+                                 identity_sig, identity_sig_len,
+                                 payload, sizeof(payload), &payload_len);
+            if (callbacks->free_buffer) {
+                callbacks->free_buffer(identity_key);
+                callbacks->free_buffer(identity_sig);
+            }
+        }
+    }
+
+    unsigned char encrypted_payload[NOISE_TAGLEN + 1024];
+    fprintf(stderr, "[NOISE] Encrypting payload (%zu bytes)...\n", payload_len);
+    if (!noise_encrypt(temp_k, 0, h, NOISE_HASHLEN, payload, payload_len, encrypted_payload)) {
+        fprintf(stderr, "[NOISE] Failed to encrypt payload\n");
+        return NULL;
+    }
+    noise_mix_hash(h, encrypted_payload, NOISE_TAGLEN + payload_len);
+
+    unsigned char msg2[2048];
+    size_t msg2_len = 0;
+    memcpy(msg2 + msg2_len, encrypted_s, NOISE_DHLEN + NOISE_TAGLEN);
+    msg2_len += NOISE_DHLEN + NOISE_TAGLEN;
+    memcpy(msg2 + msg2_len, encrypted_payload, NOISE_TAGLEN + payload_len);
+    msg2_len += NOISE_TAGLEN + payload_len;
+
+    fprintf(stderr, "[NOISE] Writing Message 2 (s + payload, %zu bytes)...\n", msg2_len);
+    if (!noise_write_frame(raw_stream, msg2, msg2_len)) {
+        fprintf(stderr, "[NOISE] Failed to write Message 2\n");
+        return NULL;
+    }
+
+    /* ---- Split ---- */
+    unsigned char split_keys[NOISE_HASHLEN * 2];
+    noise_hkdf(ck, NOISE_HASHLEN, NULL, 0, split_keys, split_keys + NOISE_HASHLEN, NOISE_HASHLEN);
+
+    struct NoiseStreamContext* nctx = calloc(1, sizeof(struct NoiseStreamContext));
+    if (!nctx)
+        return NULL;
+
+    nctx->raw_stream = raw_stream;
+    memcpy(nctx->write_key, split_keys, NOISE_KEYLEN);
+    memcpy(nctx->read_key, split_keys + NOISE_HASHLEN, NOISE_KEYLEN);
+    nctx->write_nonce = 0;
+    nctx->read_nonce = 0;
+
+    struct Libp2pV2Stream* stream = calloc(1, sizeof(struct Libp2pV2Stream));
+    if (!stream) {
+        free(nctx);
+        return NULL;
+    }
+    stream->stream_context = nctx;
+    stream->read = noise_stream_read;
+    stream->write = noise_stream_write;
+    stream->close = noise_stream_close;
+
+    return stream;
+}
+
+struct Libp2pV2Stream* libp2p_noise_handshake_responder_raw(struct Libp2pV2Stream* raw_stream, void* private_key,
+                                                             struct Libp2pPeer* peer,
+                                                             const noise_identity_callbacks_t *callbacks) {
+    (void)peer;
+
+    if (!raw_stream)
+        return NULL;
+
+    unsigned char h[NOISE_HASHLEN];
+    unsigned char ck[NOISE_HASHLEN];
+    unsigned char temp_k[NOISE_HASHLEN];
+    unsigned char e_private[NOISE_DHLEN];
+    unsigned char e_public[NOISE_DHLEN];
+    unsigned char re_public[NOISE_DHLEN];
+    unsigned char s_private[NOISE_DHLEN];
+    unsigned char s_public[NOISE_DHLEN];
+    unsigned char dh_result[NOISE_DHLEN];
+
+    memset(h, 0, NOISE_HASHLEN);
+    memset(ck, 0, NOISE_HASHLEN);
+    memset(temp_k, 0, NOISE_HASHLEN);
+
+    const char* protocol_name = "Noise_XX_25519_ChaChaPoly_SHA256";
+    size_t protocol_name_len = strlen(protocol_name);
+    if (protocol_name_len <= NOISE_HASHLEN) {
+        memcpy(h, protocol_name, protocol_name_len);
+        memset(h + protocol_name_len, 0, NOISE_HASHLEN - protocol_name_len);
+    } else {
+        SHA256((const unsigned char*)protocol_name, protocol_name_len, h);
+    }
+    memcpy(ck, h, NOISE_HASHLEN);
+
+    const char* prologue = "";
+    SHA256_CTX sha;
+    SHA256_Init(&sha);
+    SHA256_Update(&sha, h, NOISE_HASHLEN);
+    SHA256_Update(&sha, prologue, 0);
+    SHA256_Final(h, &sha);
+
+    /* ---- Read remote Message 1: e ---- */
+    size_t frame_len = 0;
+    fprintf(stderr, "[NOISE] Responder reading initiator's e...\n");
+    if (!noise_read_frame(raw_stream, re_public, NOISE_DHLEN, &frame_len) || frame_len != NOISE_DHLEN)
+        return NULL;
+    noise_mix_hash(h, re_public, NOISE_DHLEN);
+    noise_mix_hash(h, (unsigned char*)"", 0);
+
+    /* ---- Message 1 (responder): e || encrypted_s || encrypted_payload (single frame) ---- */
+    if (!noise_x25519_generate(e_private, e_public))
+        return NULL;
+    noise_mix_hash(h, e_public, NOISE_DHLEN);
+
+    if (!noise_x25519_dh(e_private, re_public, dh_result))
+        return NULL;
+    noise_mix_key(ck, temp_k, dh_result, NOISE_DHLEN);
+
     if (!noise_x25519_generate(s_private, s_public))
         return NULL;
 
@@ -497,8 +783,6 @@ struct Libp2pV2Stream* libp2p_noise_handshake_raw(struct Libp2pV2Stream* raw_str
     if (!noise_encrypt(temp_k, 0, h, NOISE_HASHLEN, s_public, NOISE_DHLEN, encrypted_s))
         return NULL;
     noise_mix_hash(h, encrypted_s, NOISE_DHLEN + NOISE_TAGLEN);
-    if (!noise_write_frame(raw_stream, encrypted_s, NOISE_DHLEN + NOISE_TAGLEN))
-        return NULL;
 
     if (!noise_x25519_dh(s_private, re_public, dh_result))
         return NULL;
@@ -528,14 +812,38 @@ struct Libp2pV2Stream* libp2p_noise_handshake_raw(struct Libp2pV2Stream* raw_str
     if (!noise_encrypt(temp_k, 0, h, NOISE_HASHLEN, payload, payload_len, encrypted_payload))
         return NULL;
     noise_mix_hash(h, encrypted_payload, NOISE_TAGLEN + payload_len);
-    if (!noise_write_frame(raw_stream, encrypted_payload, NOISE_TAGLEN + payload_len))
-        return NULL;
 
-    /* ---- Read remote Message 2: s, payload ---- */
-    unsigned char remote_encrypted_s[NOISE_DHLEN + NOISE_TAGLEN];
-    if (!noise_read_frame(raw_stream, remote_encrypted_s, sizeof(remote_encrypted_s), &frame_len)
-        || frame_len != NOISE_DHLEN + NOISE_TAGLEN)
+    unsigned char msg1[2048];
+    size_t msg1_len = 0;
+    memcpy(msg1 + msg1_len, e_public, NOISE_DHLEN);
+    msg1_len += NOISE_DHLEN;
+    memcpy(msg1 + msg1_len, encrypted_s, NOISE_DHLEN + NOISE_TAGLEN);
+    msg1_len += NOISE_DHLEN + NOISE_TAGLEN;
+    memcpy(msg1 + msg1_len, encrypted_payload, NOISE_TAGLEN + payload_len);
+    msg1_len += NOISE_TAGLEN + payload_len;
+
+    fprintf(stderr, "[NOISE] Writing responder Message 1 (e + s + payload, %zu bytes)...\n", msg1_len);
+    if (!noise_write_frame(raw_stream, msg1, msg1_len)) {
+        fprintf(stderr, "[NOISE] Failed to write responder Message 1\n");
         return NULL;
+    }
+
+    /* ---- Read remote Message 2: s + payload (single frame) ---- */
+    fprintf(stderr, "[NOISE] Reading initiator's final message (s + payload)...\n");
+    unsigned char remote_msg2[4096];
+    size_t remote_msg2_len = 0;
+    if (!noise_read_frame(raw_stream, remote_msg2, sizeof(remote_msg2), &remote_msg2_len)) {
+        fprintf(stderr, "[NOISE] Failed to read initiator's final message\n");
+        return NULL;
+    }
+    fprintf(stderr, "[NOISE] Initiator's final message len=%zu\n", remote_msg2_len);
+    if (remote_msg2_len < NOISE_DHLEN + NOISE_TAGLEN) {
+        fprintf(stderr, "[NOISE] Initiator's final message too short for encrypted s\n");
+        return NULL;
+    }
+
+    unsigned char remote_encrypted_s[NOISE_DHLEN + NOISE_TAGLEN];
+    memcpy(remote_encrypted_s, remote_msg2, NOISE_DHLEN + NOISE_TAGLEN);
 
     unsigned char remote_s_public[NOISE_DHLEN];
     if (!noise_decrypt(temp_k, 0, h, NOISE_HASHLEN, remote_encrypted_s, NOISE_DHLEN + NOISE_TAGLEN, remote_s_public))
@@ -546,17 +854,21 @@ struct Libp2pV2Stream* libp2p_noise_handshake_raw(struct Libp2pV2Stream* raw_str
         return NULL;
     noise_mix_key(ck, temp_k, dh_result, NOISE_DHLEN);
 
-    unsigned char remote_encrypted_payload[NOISE_TAGLEN + 1024];
-    if (!noise_read_frame(raw_stream, remote_encrypted_payload, sizeof(remote_encrypted_payload), &frame_len))
+    size_t remote_payload_frame_len = remote_msg2_len - (NOISE_DHLEN + NOISE_TAGLEN);
+    unsigned char remote_encrypted_payload[NOISE_TAGLEN + 2048];
+    if (remote_payload_frame_len > sizeof(remote_encrypted_payload)) {
+        fprintf(stderr, "[NOISE] Initiator's payload too large (%zu)\n", remote_payload_frame_len);
         return NULL;
+    }
+    memcpy(remote_encrypted_payload, remote_msg2 + (NOISE_DHLEN + NOISE_TAGLEN), remote_payload_frame_len);
 
-    unsigned char remote_payload[1024];
+    unsigned char remote_payload[2048];
     size_t remote_payload_len = 0;
-    if (frame_len >= NOISE_TAGLEN) {
-        remote_payload_len = frame_len - NOISE_TAGLEN;
-        if (!noise_decrypt(temp_k, 0, h, NOISE_HASHLEN, remote_encrypted_payload, frame_len, remote_payload))
+    if (remote_payload_frame_len >= NOISE_TAGLEN) {
+        remote_payload_len = remote_payload_frame_len - NOISE_TAGLEN;
+        if (!noise_decrypt(temp_k, 0, h, NOISE_HASHLEN, remote_encrypted_payload, remote_payload_frame_len, remote_payload))
             return NULL;
-        noise_mix_hash(h, remote_encrypted_payload, frame_len);
+        noise_mix_hash(h, remote_encrypted_payload, remote_payload_frame_len);
 
         if (callbacks && callbacks->verify) {
             const uint8_t *r_id_key = NULL, *r_id_sig = NULL;
@@ -568,14 +880,17 @@ struct Libp2pV2Stream* libp2p_noise_handshake_raw(struct Libp2pV2Stream* raw_str
                     if (!callbacks->verify(r_id_key, r_id_key_len,
                                            remote_s_public, NOISE_DHLEN,
                                            r_id_sig, r_id_sig_len)) {
-                        libp2p_logger_error("noise", "Remote identity signature verification failed\n");
+                        libp2p_v2_logger_error("noise", "Remote identity signature verification failed\n");
                         return NULL;
+                    }
+                    if (peer != NULL && noise_peer_id_from_identity_key(r_id_key, r_id_key_len, peer)) {
+                        libp2p_v2_logger_info("noise", "Derived peer id from remote identity key: %s\n", peer->id);
                     }
                 }
             }
         }
     } else {
-        noise_mix_hash(h, remote_encrypted_payload, frame_len);
+        noise_mix_hash(h, remote_encrypted_payload, remote_payload_frame_len);
     }
 
     /* ---- Split ---- */
@@ -587,8 +902,9 @@ struct Libp2pV2Stream* libp2p_noise_handshake_raw(struct Libp2pV2Stream* raw_str
         return NULL;
 
     nctx->raw_stream = raw_stream;
-    memcpy(nctx->write_key, split_keys, NOISE_KEYLEN);
-    memcpy(nctx->read_key, split_keys + NOISE_HASHLEN, NOISE_KEYLEN);
+    /* Responder swap: read_key = first half, write_key = second half */
+    memcpy(nctx->read_key, split_keys, NOISE_KEYLEN);
+    memcpy(nctx->write_key, split_keys + NOISE_HASHLEN, NOISE_KEYLEN);
     nctx->write_nonce = 0;
     nctx->read_nonce = 0;
 

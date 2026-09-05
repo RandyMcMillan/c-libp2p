@@ -565,14 +565,14 @@ struct YamuxContext* libp2p_yamux_context_new(struct Stream* stream, int amServe
  * @returns true(1) on success, false(0) otherwise
  */
 int libp2p_yamux_send_protocol(struct Stream* stream) {
-	// JMJ debug
 	libp2p_logger_debug("yamux", "Sending protocol through stream of type %d and channel %d.\n", stream->stream_type, stream->channel);
 	const char* protocolID = "/yamux/1.0.0\n";
 	struct StreamMessage outgoing;
 	outgoing.data_size = strlen(protocolID);
 	outgoing.data = (uint8_t*)protocolID;
 	outgoing.error_number = 0;
-	return stream->write(stream->stream_context, &outgoing);
+	int ret = stream->write(stream->stream_context, &outgoing);
+	return ret;
 }
 
 /***

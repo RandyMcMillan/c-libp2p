@@ -12,21 +12,21 @@ libp2p_yamux_stream_t *libp2p_yamux_stream_open(libp2p_yamux_session_t *session)
     return NULL;
 }
 
-int libp2p_yamux_stream_write(libp2p_yamux_stream_t *stream, const uint8_t *buf, size_t len) {
+int libp2p_v2_yamux_stream_write(libp2p_yamux_stream_t *stream, const uint8_t *buf, size_t len) {
     (void)stream;
     (void)buf;
     (void)len;
     return -1;
 }
 
-int libp2p_yamux_stream_read(libp2p_yamux_stream_t *stream, uint8_t *buf, size_t len) {
+int libp2p_v2_yamux_stream_read(libp2p_yamux_stream_t *stream, uint8_t *buf, size_t len) {
     (void)stream;
     (void)buf;
     (void)len;
     return -1;
 }
 
-void libp2p_yamux_stream_close(libp2p_yamux_stream_t *stream) {
+void libp2p_v2_yamux_stream_close(libp2p_yamux_stream_t *stream) {
     (void)stream;
 }
 

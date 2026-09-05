@@ -1,5 +1,5 @@
 CC = gcc
-CFLAGS = -Wall -Wextra -std=c99 -I include -I ../c-protobuf
+CFLAGS = -Wall -Wextra -std=c99 -I include -I ../include -I ../../include -I ../c-protobuf -I ../c-multihash/include -I ../c-multiaddr/include
 LDFLAGS =
 
 ifdef HAS_LSQUIC
@@ -15,9 +15,11 @@ SRCS = src/net/multiaddr.c \
        src/peer/peerstore.c \
        src/conn/multistream.c \
        src/conn/noise.c \
+       src/conn/noise_callbacks.c \
        src/conn/yamux.c \
        src/conn/connection.c \
        src/identify/identify_v2.c \
+       src/identify/identify_v2_ipfs.c \
        src/swarm/swarm.c \
        src/utils/logger.c
 

@@ -144,6 +144,57 @@ struct Libp2pV2Stream* libp2p_yamux_stream_open(struct YamuxSession* session) {
     return stream;
 }
 
+struct Libp2pV2Stream* libp2p_yamux_stream_accept(struct YamuxSession* session) {
+    if (session == NULL)
+        return NULL;
+
+    struct YamuxHeader hdr;
+    if (session->underlying_stream->read(session->underlying_stream, (unsigned char*)&hdr, sizeof(hdr)) <= 0)
+        return NULL;
+
+    uint16_t flags = ntohs(hdr.flags);
+    uint32_t stream_id = ntohl(hdr.stream_id);
+    uint32_t length = ntohl(hdr.length);
+
+    if (hdr.version != YAMUX_VERSION) {
+        libp2p_v2_logger_error("yamux", "Unsupported yamux version: %d\n", hdr.version);
+        return NULL;
+    }
+
+    if (!(flags & YAMUX_FLAG_SYN)) {
+        libp2p_v2_logger_error("yamux", "Expected SYN flag on incoming stream\n");
+        return NULL;
+    }
+
+    /* Consume any payload that may accompany the SYN (should be 0 for opens) */
+    if (length > 0) {
+        unsigned char* discard = (unsigned char*)malloc(length);
+        if (discard) {
+            session->underlying_stream->read(session->underlying_stream, discard, length);
+            free(discard);
+        }
+    }
+
+    struct YamuxStreamContext* ctx = (struct YamuxStreamContext*)malloc(sizeof(struct YamuxStreamContext));
+    if (ctx == NULL)
+        return NULL;
+
+    ctx->session = session;
+    ctx->stream_id = stream_id;
+
+    struct Libp2pV2Stream* stream = (struct Libp2pV2Stream*)calloc(1, sizeof(struct Libp2pV2Stream));
+    if (stream == NULL) {
+        free(ctx);
+        return NULL;
+    }
+
+    stream->stream_context = ctx;
+    stream->read = yamux_stream_read;
+    stream->write = yamux_stream_write;
+    stream->close = yamux_stream_close;
+    return stream;
+}
+
 void libp2p_yamux_session_free(struct YamuxSession* session) {
     if (session != NULL) {
         if (session->underlying_stream != NULL) {

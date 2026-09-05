@@ -12,6 +12,7 @@ struct Libp2pV2Stream {
     void (*close)(struct Libp2pV2Stream* stream);
 };
 
+struct Libp2pV2Stream* libp2p_net_tcp_wrap_fd(int fd);
 struct Libp2pV2Stream* libp2p_net_tcp_dial(const char* ip_address, uint16_t port);
 
 #endif /* LIBP2P_NET_TCP_H */

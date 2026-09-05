@@ -37,7 +37,7 @@ static ssize_t secio_stream_read(struct Libp2pV2Stream* stream, unsigned char* b
 
     int out_len = 0;
     if (!EVP_DecryptUpdate(ctx->read_ctx, buf, &out_len, cipher_buf, (int)bytes_read)) {
-        libp2p_logger_error("secio", "Decryption failure on read\n");
+        libp2p_v2_logger_error("secio", "Decryption failure on read\n");
         return -1;
     }
 
@@ -54,7 +54,7 @@ static ssize_t secio_stream_write(struct Libp2pV2Stream* stream, const unsigned 
     int out_len = 0;
 
     if (!EVP_EncryptUpdate(ctx->write_ctx, cipher_buf, &out_len, buf, (int)count)) {
-        libp2p_logger_error("secio", "Encryption failure on write\n");
+        libp2p_v2_logger_error("secio", "Encryption failure on write\n");
         return -1;
     }
 
@@ -84,7 +84,7 @@ struct Libp2pV2Stream* libp2p_secio_handshake(struct Libp2pV2Stream* raw_stream,
         return NULL;
 
     if (!libp2p_net_multistream_negotiate_protocol(raw_stream, SECIO_PROTOCOL_ID)) {
-        libp2p_logger_error("secio", "Failed to negotiate SECIO protocol\n");
+        libp2p_v2_logger_error("secio", "Failed to negotiate SECIO protocol\n");
         return NULL;
     }
 
@@ -101,7 +101,7 @@ struct Libp2pV2Stream* libp2p_secio_handshake(struct Libp2pV2Stream* raw_stream,
 
     if (raw_stream->write(raw_stream, ctx->local_nonce, NONCE_SIZE) <= 0 ||
         raw_stream->read(raw_stream, ctx->remote_nonce, NONCE_SIZE) <= 0) {
-        libp2p_logger_error("secio", "Failed to exchange SECIO nonces\n");
+        libp2p_v2_logger_error("secio", "Failed to exchange SECIO nonces\n");
         free(ctx);
         return NULL;
     }
