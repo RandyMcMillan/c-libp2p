@@ -48,7 +48,7 @@ int test_mbedtls_varint_128_binary() {
 
 	printf("And now the other way...\n");
 
-	for(int i = 1; i <= 5; i--) {
+	for (int i = 1; i <= 5; i++) {
 		if (convertToString(starting_val, i) != 1)
 			return 0;
 	}
