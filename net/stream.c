@@ -70,10 +70,12 @@ struct YamuxChannelContext* libp2p_yamux_get_channel_context(void* stream_contex
 struct Stream* libp2p_stream_get_latest_stream(struct Stream* in) {
 	if (in == NULL)
 		return NULL;
-	if (in->stream_type == STREAM_TYPE_BRIDGE) {
-		/* Bridge streams wrap c-libp2p transport streams but do not own a
-		 * ConnectionContext/session. Return the stream unchanged so the
-		 * caller keeps operating on the active (multi)stream layer. */
+	if (in->stream_type == STREAM_TYPE_MULTISTREAM) {
+		/* A multistream already represents the active negotiated layer. */
+		return in;
+	} else if (in->stream_type == STREAM_TYPE_BRIDGE) {
+		/* Bridge streams wrap transport streams that do not own a
+		 * ConnectionContext/session. Return them unchanged. */
 		return in;
 	} else if (in->stream_type == STREAM_TYPE_RAW) {
 		struct ConnectionContext* ctx = (struct ConnectionContext*)in->stream_context;
