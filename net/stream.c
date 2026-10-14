@@ -50,8 +50,10 @@ int libp2p_stream_is_open(struct Stream* stream) {
 		base_stream = base_stream->parent_stream;
 	if (base_stream->stream_type == STREAM_TYPE_RAW) {
 		struct ConnectionContext* ctx = (struct ConnectionContext*)base_stream->stream_context;
-		if (ctx->socket_descriptor > 0)
+		if (ctx != NULL && ctx->socket_descriptor > 0)
 			return 1;
+	} else if (base_stream->stream_type == STREAM_TYPE_BRIDGE) {
+		return 1;
 	}
 	return 0;
 }
@@ -68,9 +70,20 @@ struct YamuxChannelContext* libp2p_yamux_get_channel_context(void* stream_contex
 struct Stream* libp2p_stream_get_latest_stream(struct Stream* in) {
 	if (in == NULL)
 		return NULL;
-	if (in->stream_type == STREAM_TYPE_RAW) {
+	if (in->stream_type == STREAM_TYPE_BRIDGE) {
+		/* Bridge streams wrap c-libp2p transport streams but do not own a
+		 * ConnectionContext/session. Return the stream unchanged so the
+		 * caller keeps operating on the active (multi)stream layer. */
+		return in;
+	} else if (in->stream_type == STREAM_TYPE_RAW) {
 		struct ConnectionContext* ctx = (struct ConnectionContext*)in->stream_context;
-		return ctx->session_context->default_stream;
+		if (ctx != NULL && ctx->session_context != NULL && ctx->session_context->default_stream != NULL) {
+			return ctx->session_context->default_stream;
+		}
+		/* Fall back to parent or self when the raw context is unavailable. */
+		if (in->parent_stream != NULL)
+			return libp2p_stream_get_latest_stream(in->parent_stream);
+		return in;
 	} else if (in->stream_type == STREAM_TYPE_YAMUX) {
 		struct YamuxChannelContext* ctx = libp2p_yamux_get_channel_context(in->stream_context);
 		if (ctx != NULL)
