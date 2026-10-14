@@ -51,3 +51,5 @@ clean:
 	$(foreach dir,$(SUBMODULES), $(MAKE) -C $(dir) clean ;)
 	$(foreach dir,$(COMPONENTS), $(MAKE) -C $(dir) clean ;)
 	make -C test clean
+
+-include ACT.mk
