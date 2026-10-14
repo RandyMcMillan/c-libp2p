@@ -178,10 +178,13 @@ int libp2p_conn_dialer_join_swarm(const struct Dialer* dialer, struct Libp2pPeer
 		// (use a longer timeout because the swarm thread read may block for
 		// up to 10 seconds via the v2 raw stream wrapper)
 		/* Process multimpsever-over-noise ack synchronously. */
+		/* Process multimpsever over noise */
 		{
 			struct StreamMessage* __ms_ack = NULL;
-			if (ms_over_noise->parent_stream != NULL && ms_over_noise->parent_stream->read != NULL &&
-			    ms_over_noise->parent_stream->read(ms_over_noise->parent_stream->stream_context, &__ms_ack, 5) && __ms_ack != NULL) {
+			int __read_ok = 0;
+			if (ms_over_noise->parent_stream != NULL && ms_over_noise->parent_stream->read != NULL)
+				__read_ok = ms_over_noise->parent_stream->read(ms_over_noise->parent_stream->stream_context, &__ms_ack, 5);
+			if (__read_ok && __ms_ack != NULL) {
 				libp2p_net_multistream_handle_message(__ms_ack, ms_over_noise, NULL);
 				libp2p_stream_message_free(__ms_ack);
 			}
