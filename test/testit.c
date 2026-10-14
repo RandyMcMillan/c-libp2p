@@ -17,6 +17,7 @@
 #include "test_peer.h"
 #include "test_yamux.h"
 #include "test_net.h"
+#include "test_stream.h"
 #include "libp2p/utils/logger.h"
 
 struct test {
@@ -125,6 +126,11 @@ int build_test_collection() {
 	add_test("test_peerstore", test_peerstore,1);
 	add_test("test_aes", test_aes, 1);
 	add_test("test_yamux_stream_new", test_yamux_stream_new, 1);
+
+	add_test("test_stream_latest_raw_null_fallback", test_stream_latest_raw_null_fallback, 1);
+	add_test("test_stream_latest_bridge_passthrough", test_stream_latest_bridge_passthrough, 1);
+	add_test("test_stream_latest_poly_passthrough", test_stream_latest_poly_passthrough, 1);
+	add_test("test_stream_latest_raw_session_default", test_stream_latest_raw_session_default, 1);
 	add_test("test_yamux_identify", test_yamux_identify, 1);
 	add_test("test_yamux_incoming_protocol_request", test_yamux_incoming_protocol_request, 1);
 	add_test("test_net_server_startup_shutdown", test_net_server_startup_shutdown, 1);
