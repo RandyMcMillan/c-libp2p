@@ -88,7 +88,6 @@ static int yamux_read_header(struct YamuxSession* session, struct YamuxHeader* h
 
 static int yamux_send_ping_response(struct YamuxSession* session, uint32_t value)
 {
-    fprintf(stderr, "[YAMUX] ping response value=%u\n", value);
     return yamux_send_header(session, YAMUX_TYPE_PING, YAMUX_FLAG_ACK, 0, value);
 }
 
@@ -171,8 +170,6 @@ static ssize_t yamux_stream_read(struct Libp2pV2Stream* stream, unsigned char* b
         }
 
         if (hdr.type == YAMUX_TYPE_PING || hdr.type == YAMUX_TYPE_GO_AWAY) {
-            fprintf(stderr, "[YAMUX] stream %u received control type=%u flags=%u len=%u\n",
-                    ctx->stream_id, hdr.type, hdr.flags, hdr.length);
             if (!yamux_handle_control_frame(ctx->session, &hdr))
                 return -1;
             continue;
@@ -422,19 +419,13 @@ int libp2p_yamux_session_ping(struct YamuxSession* session)
         return 0;
 
     uint32_t value = session->ping_seq++;
-    fprintf(stderr, "[YAMUX] ping send value=%u\n", value);
     if (!yamux_send_header(session, YAMUX_TYPE_PING, 0, 0, value))
         return 0;
 
     for (;;) {
         struct YamuxHeader hdr;
-        if (!yamux_read_header(session, &hdr)) {
-            fprintf(stderr, "[YAMUX] ping read header failed\n");
+        if (!yamux_read_header(session, &hdr))
             return 0;
-        }
-
-        fprintf(stderr, "[YAMUX] ping got type=%u flags=%u sid=%u len=%u\n",
-                hdr.type, hdr.flags, hdr.stream_id, hdr.length);
 
         if (hdr.type == YAMUX_TYPE_PING && (hdr.flags & YAMUX_FLAG_ACK) && hdr.length == value)
             return 1;
