@@ -199,8 +199,15 @@ static ssize_t yamux_stream_read(struct Libp2pV2Stream* stream, unsigned char* b
 
         /* DATA frame for this stream. */
         uint32_t payload_len = hdr.length;
-        if (payload_len == 0)
+        int fin = (hdr.flags & YAMUX_FLAG_FIN) != 0;
+
+        if (payload_len == 0) {
+            if (fin) {
+                ctx->closed = 1;
+                return 0;
+            }
             continue;
+        }
 
         uint32_t to_read = payload_len > count ? (uint32_t)count : payload_len;
         if (!yamux_read_full(ctx->session->underlying_stream, buf, to_read))
@@ -223,6 +230,9 @@ static ssize_t yamux_stream_read(struct Libp2pV2Stream* stream, unsigned char* b
             if (yamux_send_header(ctx->session, YAMUX_TYPE_WINDOW_UPDATE, 0, ctx->stream_id, increment))
                 ctx->recv_window += increment;
         }
+
+        if (fin)
+            ctx->closed = 1;
 
         return (ssize_t)to_read;
     }

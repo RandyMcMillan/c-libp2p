@@ -261,12 +261,8 @@ static void noise_stream_close(struct Libp2pV2Stream* stream) {
     if (!stream) return;
     struct NoiseStreamContext* ctx = (struct NoiseStreamContext*)stream->stream_context;
     if (ctx) {
-        if (ctx->raw_stream) {
+        if (ctx->raw_stream)
             ctx->raw_stream->close(ctx->raw_stream);
-            if (ctx->raw_stream->stream_context)
-                free(ctx->raw_stream->stream_context);
-            free(ctx->raw_stream);
-        }
         free(ctx);
         stream->stream_context = NULL;
     }

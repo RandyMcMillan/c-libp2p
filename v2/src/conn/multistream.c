@@ -66,6 +66,16 @@ static int read_length_prefixed_msg(struct Libp2pV2Stream* stream, char* buffer,
     return 1;
 }
 
+int libp2p_net_multistream_read_protocol(struct Libp2pV2Stream* stream, char* buffer, size_t max_len)
+{
+    return read_length_prefixed_msg(stream, buffer, max_len);
+}
+
+int libp2p_net_multistream_write_protocol(struct Libp2pV2Stream* stream, const char* protocol)
+{
+    return write_length_prefixed_msg(stream, protocol);
+}
+
 int libp2p_v2_net_multistream_connect(struct Libp2pV2Stream* stream) {
     if (stream == NULL)
         return 0;
