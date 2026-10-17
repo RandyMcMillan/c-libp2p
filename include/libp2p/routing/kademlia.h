@@ -3,6 +3,15 @@
 #include "libp2p/utils/vector.h"
 #include "multiaddr/multiaddr.h"
 
+/**
+ * Compute a bounded exponential backoff delay in microseconds.
+ * @param attempt the retry attempt number (0-based)
+ * @param base_us the initial delay
+ * @param max_us the maximum delay cap
+ * @returns a jittered delay in microseconds in the range [base_us, max_us]
+ */
+unsigned int dht_backoff_delay_us(int attempt, unsigned int base_us, unsigned int max_us);
+
 int start_kademlia(int sock, int family, char* peer_id, int timeout, struct Libp2pVector* bootstrap_addresses);
 int start_kademlia_multiaddress(struct MultiAddress* multiaddress, char* peer_id, int timeout, struct Libp2pVector* bootstrap_addresses);
 void stop_kademlia (void);

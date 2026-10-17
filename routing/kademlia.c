@@ -21,6 +21,34 @@
 
 extern FILE *dht_debug;
 
+static pthread_mutex_t dht_random_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+static long dht_random_locked(void) {
+	long r;
+	pthread_mutex_lock(&dht_random_mutex);
+	r = random();
+	pthread_mutex_unlock(&dht_random_mutex);
+	return r;
+}
+
+unsigned int dht_backoff_delay_us(int attempt, unsigned int base_us, unsigned int max_us) {
+	unsigned int delay = base_us;
+	for (int i = 0; i < attempt && delay < max_us; i++) {
+		if (delay > max_us / 2) {
+			delay = max_us;
+			break;
+		}
+		delay *= 2;
+	}
+	if (delay > max_us)
+		delay = max_us;
+	/* Add random jitter in [delay/2, delay] to avoid thundering herd. */
+	if (delay > 1) {
+		delay = delay / 2 + (dht_random_locked() % (delay / 2 + 1));
+	}
+	return delay;
+}
+
 #define MAX_BOOTSTRAP_NODES 20
 static struct sockaddr_storage bootstrap_nodes[MAX_BOOTSTRAP_NODES];
 static int num_bootstrap_nodes = 0;
@@ -36,6 +64,7 @@ time_t tosleep = 0;
 int kfd = -1;
 int net_family = 0;
 volatile int8_t searching = 0; // search lock, -1 to busy, 0 to free, 1 to running.
+static int search_attempts = 0; // retry attempt counter for exponential backoff.
 volatile char hash[20];     // hash to be search or announce.
 volatile uint16_t announce_port = 0;
 volatile int8_t closing = 0;
@@ -257,7 +286,7 @@ int start_kademlia(int net_fd, int family, char* peer_id, int timeout, struct Li
         dht_ping_node((struct sockaddr*)&bootstrap_nodes[i],
                       sizeof (bootstrap_nodes[i]));
     	fprintf(stderr, "ping returned %d\n", retVal);
-        usleep(random() % 100000);
+        usleep(dht_random_locked() % 100000);
     }
 
     // TODO: Read cache nodes from file and load using dht_insert_node.
@@ -302,7 +331,7 @@ void *kademlia_thread (void *ptr)
 
     for(;;) {
         tv.tv_sec = tosleep;
-        tv.tv_usec = random() % 1000000;
+        tv.tv_usec = dht_random_locked() % 1000000;
 
         FD_ZERO(&readfds);
         FD_SET(kfd, &readfds);
@@ -377,12 +406,13 @@ int search_kademlia_internal (unsigned char* id, int port, int to)
     int i;
 
     while (searching != 0) {
-        i = random() % 100000;
-        if (i > to) {
+        unsigned int delay = dht_backoff_delay_us(search_attempts, 1000, 100000);
+        if ((int)delay > to) {
             return 0; // timeout waiting a chance
         }
-        usleep(i);
-        to -= i;
+        usleep(delay);
+        to -= delay;
+        search_attempts++;
     }
 
     searching = -1; // lock.
@@ -394,6 +424,7 @@ int search_kademlia_internal (unsigned char* id, int port, int to)
     announce_port = port;
 
     searching = 1; // search.
+    search_attempts = 0; // reset attempts for the next wait phase
 
     return to;
 }
@@ -491,12 +522,14 @@ struct MultiAddress** search_kademlia(char* peer_id, int timeout)
     if (to == 0) return NULL; // time out.
 
     // Wait for search completion.
+    int wait_attempts = 0;
     for(;;) {
-        i = random() % 100000;
-        if (i > to) {
+        unsigned int delay = dht_backoff_delay_us(wait_attempts, 1000, 100000);
+        if ((int)delay > to) {
             return NULL; // timeout.
         }
-        usleep(i);
+        usleep(delay);
+        wait_attempts++;
         for (rp = search_result ; rp ; rp = rp->next) {
             if (memcmp(rp->hash, id, sizeof hash) == 0) { // Found.
                 char ipstr[INET6_ADDRSTRLEN + 1];
@@ -504,12 +537,16 @@ struct MultiAddress** search_kademlia(char* peer_id, int timeout)
                 int c = 0;
 
                 // Wait for result or time out.
+                int result_attempts = 0;
                 while (to > 0 &&
                        search_result->ipv4_count == 0 &&
                        search_result->ipv6_count == 0) {
                          to = search_kademlia_internal (id, 0, to); // Repeat search to collect result.
-                         usleep(2000000); // Wait a few seconds for the result.
-                         to -= 2000000;
+                         unsigned int result_delay = dht_backoff_delay_us(result_attempts, 100000, 2000000);
+                         if ((int)result_delay > to) break;
+                         usleep(result_delay); // Wait with exponential backoff for the result.
+                         to -= result_delay;
+                         result_attempts++;
                 }
 
                 if (search_result->ipv4_count == 0 ||
@@ -549,7 +586,7 @@ struct MultiAddress** search_kademlia(char* peer_id, int timeout)
                 return ret;
             }
         }
-        to -= i;
+        to -= delay;
     }
 
     return NULL;
