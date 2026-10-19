@@ -475,8 +475,7 @@ int libp2p_yamux_peek(void* stream_context) {
 	if (stream_context == NULL)
 		return -1;
 
-	struct YamuxContext* ctx = libp2p_yamux_get_context(stream_context);
-	struct Stream* parent_stream = ctx->stream->parent_stream;
+	struct Stream* parent_stream = libp2p_yamux_get_parent_stream(stream_context);
 	if (parent_stream == NULL)
 		return -1;
 
