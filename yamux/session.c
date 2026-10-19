@@ -346,19 +346,26 @@ int yamux_decode(void* context, const uint8_t* incoming, size_t incoming_size, s
 					yamux_session->new_stream_fn(yamuxContext, yamuxContext->stream, *return_message);
 				}
 				// handle window update (if there is one)
-				struct yamux_session_stream ss = yamux_session->streams[f.streamid];
-				ss.alive = 1;
-				ss.stream = yamux_stream_new();
-				ss.stream->id = f.streamid;
-				ss.stream->session = yamux_session;
-				ss.stream->state = yamux_stream_syn_recv;
-				ss.stream->window_size = 0;
-				yamux_stream_process(ss.stream, &f, &incoming[frame_size], incoming_size - frame_size);
+				// The slot for this stream was already allocated by yamux_channel_new above.
+				struct yamux_session_stream *ss = NULL;
+				for (size_t i = 0; i < yamux_session->cap_streams; ++i) {
+					if (yamux_session->streams[i].stream != NULL && yamux_session->streams[i].stream->id == f.streamid) {
+						ss = &yamux_session->streams[i];
+						break;
+					}
+				}
+				if (ss == NULL) {
+					libp2p_logger_error("yamux", "session->yamux_decode: Unable to find session stream for new inbound stream %d.\n", f.streamid);
+					return -EPROTO;
+				}
+				ss->stream->state = yamux_stream_syn_recv;
+				ss->stream->window_size = 0;
+				yamux_stream_process(ss->stream, &f, &incoming[frame_size], incoming_size - frame_size);
 				channelContext->state = yamux_stream_syn_recv;
 				if (f.type == yamux_frame_window_update) {
 					libp2p_logger_debug("yamux", "Received window update for stream %d. Sending one back.\n", f.streamid);
 					// send it back
-					yamux_stream_window_update(channelContext, ss.stream->window_size);
+					yamux_stream_window_update(channelContext, ss->stream->window_size);
 				}
 				// TODO: Start negotiations of multistream
 				struct Stream* multistream = libp2p_net_multistream_stream_new(yamuxChannelStream, 0);
@@ -388,12 +395,17 @@ int yamux_decode(void* context, const uint8_t* incoming, size_t incoming_size, s
  * @returns the correce yamux_session_stream
  */
 struct yamux_session_stream* yamux_get_session_stream(struct yamux_session* session, int channel) {
+    libp2p_logger_debug("yamux", "get_session_stream: looking for channel %d among %zu slots.\n", channel, session->cap_streams);
     for (size_t i = 0; i < session->cap_streams; ++i)
     {
         struct yamux_session_stream* ss = &session->streams[i];
-        if (ss != NULL && ss->stream != NULL && ss->stream->stream != NULL && ss->stream->stream->channel == channel)
-        	return ss;
+        if (ss != NULL && ss->stream != NULL && ss->stream->stream != NULL) {
+            libp2p_logger_debug("yamux", "get_session_stream: slot %zu stream id %d channel %d.\n", i, ss->stream->id, ss->stream->stream->channel);
+            if (ss->stream->stream->channel == channel)
+                return ss;
+        }
     }
+    libp2p_logger_debug("yamux", "get_session_stream: channel %d not found.\n", channel);
     return NULL;
 }
 

@@ -97,6 +97,7 @@ FOUND:;
     channel->channel = id;
     channel->child_stream = NULL;
     channel->state = yamux_stream_inited;
+    session->num_streams++;
 
 
     return channelStream;

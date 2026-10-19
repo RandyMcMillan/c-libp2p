@@ -158,8 +158,10 @@ int libp2p_conn_dialer_join_swarm(const struct Dialer* dialer, struct Libp2pPeer
 		libp2p_net_multistream_handle_message(ms_ack, multistream, NULL);
 		libp2p_stream_message_free(ms_ack);
 	}
-	// now that the initial multistream ack is processed, the swarm can take over
-	libp2p_swarm_add_peer(dialer->swarm, peer);
+	// Keep the peer off the swarm until the multistream-over-noise handshake
+	// is complete. Adding the peer earlier spawns a swarm listener thread that
+	// races with the dialer for reads on the Noise stream, causing nonce desync
+	// and failed decryption.
 	// wait for multistream
 	if (!libp2p_net_multistream_ready(peer->sessionContext, 5)) {
 		DEBUG_PRINTF("[dialer debug] initial multistream not ready\n");
@@ -237,12 +239,31 @@ int libp2p_conn_dialer_join_swarm(const struct Dialer* dialer, struct Libp2pPeer
 		DEBUG_PRINTF("[dialer debug] creating yamux, default_stream type=%d\n", peer->sessionContext->default_stream->stream_type);
 		new_stream = libp2p_yamux_stream_new(peer->sessionContext->default_stream, 0, dialer->swarm->protocol_handlers);
 		if (new_stream != NULL) {
+			// Drive the yamux protocol ack synchronously before adding the peer to
+			// the swarm, so we don't depend on the swarm thread scheduling for this
+			// final negotiation step.
+			{
+				struct StreamMessage* yamux_ack = NULL;
+				int yamux_read_ok = 0;
+				if (peer->sessionContext->default_stream != NULL && peer->sessionContext->default_stream->read != NULL) {
+					for (int i = 0; i < 5; i++) {
+						yamux_read_ok = peer->sessionContext->default_stream->read(peer->sessionContext->default_stream->stream_context, &yamux_ack, 2);
+						if (yamux_read_ok)
+							break;
+					}
+				}
+				if (yamux_ack != NULL)
+					libp2p_stream_message_free(yamux_ack);
+			}
 			if (!libp2p_yamux_stream_ready(peer->sessionContext, 5)) {
 				DEBUG_PRINTF("[dialer debug] yamux not ready\n");
 				libp2p_logger_error("dialer", "Unable to get yamux into the ready status.\n");
 				return 0;
 			}
 			DEBUG_PRINTF("[dialer debug] yamux ready, default_stream type=%d\n", peer->sessionContext->default_stream->stream_type);
+			// Now that the Noise-secured multistream and yamux are ready, hand the
+			// peer off to the swarm. The swarm thread will drive yamux frame I/O.
+			libp2p_swarm_add_peer(dialer->swarm, peer);
 			// the rest should be done on another thread
 			// we have our swarm connection. Now we ask for some "channels"
 			// id over multistream over yamux

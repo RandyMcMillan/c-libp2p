@@ -426,6 +426,18 @@ int libp2p_yamux_write(void* stream_context, struct StreamMessage* message) {
 		return parent_stream->write(parent_stream->stream_context, message);
 	}
 
+	// Opening a new yamux stream must start with a WINDOW_UPDATE frame that
+	// carries the SYN flag.  Sending DATA+SYN violates the protocol and causes
+	// go-yamux/Kubo peers to close the connection.
+	if (channel != NULL && channel->state == yamux_stream_inited) {
+		ssize_t init_sent = yamux_stream_window_update(channel, YAMUX_DEFAULT_WINDOW);
+		if (init_sent <= 0) {
+			libp2p_logger_error("yamux", "write: Failed to send WINDOW_UPDATE+SYN for channel %d.\n", channel->channel);
+			return 0;
+		}
+		libp2p_logger_debug("yamux", "write: Sent WINDOW_UPDATE+SYN for channel %d.\n", channel->channel);
+	}
+
 	struct StreamMessage* outgoing_message = libp2p_yamux_prepare_to_send(message);
 	// now convert fame for network use
 	struct yamux_frame* frame = (struct yamux_frame*)outgoing_message->data;
