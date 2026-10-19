@@ -167,18 +167,15 @@ int libp2p_conn_dialer_join_swarm(const struct Dialer* dialer, struct Libp2pPeer
 			return 0;
 		}
 		// multistream over noise
-		libp2p_logger_error("dialer", "DEBUG: about to create multistream over noise\n");
 		struct Stream* ms_over_noise = libp2p_net_multistream_stream_new(new_stream, 0);
 		if (ms_over_noise == NULL) {
 			libp2p_logger_error("dialer", "Unable to negotiate multistream over noise.\n");
 			return 0;
 		}
-		libp2p_logger_error("dialer", "DEBUG: multistream over noise created, waiting for ready\n");
 		// wait for multistream-over-noise ack before proceeding to yamux
 		// (use a longer timeout because the swarm thread read may block for
 		// up to 10 seconds via the v2 raw stream wrapper)
-		/* Process multimpsever-over-noise ack synchronously. */
-		/* Process multimpsever over noise */
+		/* Process multistream-over-noise ack synchronously. */
 		{
 			struct StreamMessage* __ms_ack = NULL;
 			int __read_ok = 0;
@@ -193,16 +190,13 @@ int libp2p_conn_dialer_join_swarm(const struct Dialer* dialer, struct Libp2pPeer
 			libp2p_logger_error("dialer", "Multistream over noise not ready.\n");
 			return 0;
 		}
-		libp2p_logger_error("dialer", "DEBUG: multistream over noise ready, about to create yamux\n");
 		// yamux over multistream
 		new_stream = libp2p_yamux_stream_new(peer->sessionContext->default_stream, 0, dialer->swarm->protocol_handlers);
 		if (new_stream != NULL) {
-			libp2p_logger_error("dialer", "DEBUG: yamux created, waiting for ready\n");
 			if (!libp2p_yamux_stream_ready(peer->sessionContext, 5)) {
 				libp2p_logger_error("dialer", "Unable to get yamux into the ready status.\n");
 				return 0;
 			}
-			libp2p_logger_error("dialer", "DEBUG: yamux ready\n");
 			// the rest should be done on another thread
 			// we have our swarm connection. Now we ask for some "channels"
 			// id over multistream over yamux

@@ -1,3 +1,4 @@
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -5,6 +6,7 @@
 #include "libp2p/crypto/rsa.h"
 #include "libp2p/crypto/key.h"
 #include "libp2p/utils/logger.h"
+#include "ipfs/crypto/verify.h"
 
 #define NOISE_SIG_PREFIX "noise-libp2p-static-key:"
 #define NOISE_SIG_PREFIX_LEN 24
@@ -69,32 +71,26 @@ static int noise_cb_verify(const uint8_t *identity_key, size_t identity_key_len,
         return 0;
     }
 
-    if (pub_key->type == KEYTYPE_ED25519) {
-        /* TODO: implement Ed25519 signature verification */
-        libp2p_crypto_public_key_free(pub_key);
-        return 1;
-    }
-
-    if (pub_key->type != KEYTYPE_RSA) {
-        libp2p_crypto_public_key_free(pub_key);
-        return 0;
-    }
-
-    struct RsaPublicKey rsa_pub = {
-        .der = pub_key->data,
-        .der_length = pub_key->data_size
-    };
-
     unsigned char *to_verify = (unsigned char *)malloc(NOISE_SIG_PREFIX_LEN + data_len);
     if (!to_verify) {
         libp2p_crypto_public_key_free(pub_key);
         return 0;
     }
-
     memcpy(to_verify, NOISE_SIG_PREFIX, NOISE_SIG_PREFIX_LEN);
     memcpy(to_verify + NOISE_SIG_PREFIX_LEN, data, data_len);
 
-    int ret = libp2p_crypto_rsa_verify(&rsa_pub, to_verify, NOISE_SIG_PREFIX_LEN + data_len, sig);
+    int ret = 0;
+    if (pub_key->type == KEYTYPE_RSA) {
+        struct RsaPublicKey rsa_pub = {
+            .der = pub_key->data,
+            .der_length = pub_key->data_size
+        };
+        ret = libp2p_crypto_rsa_verify(&rsa_pub, to_verify, NOISE_SIG_PREFIX_LEN + data_len, sig);
+    } else if (pub_key->type == KEYTYPE_ED25519) {
+        ret = ipfs_crypto_verify_ed25519(pub_key->data, pub_key->data_size,
+                                         to_verify, NOISE_SIG_PREFIX_LEN + data_len,
+                                         sig, sig_len);
+    }
 
     free(to_verify);
     libp2p_crypto_public_key_free(pub_key);
