@@ -1,6 +1,8 @@
+#include <stdio.h>
 #include <string.h>
 #include <unistd.h>
 #include "varint.h"
+#include "libp2p/utils/debug.h"
 #include "libp2p/yamux/session.h"
 #include "libp2p/yamux/yamux.h"
 #include "libp2p/net/protocol.h"
@@ -566,6 +568,7 @@ struct YamuxContext* libp2p_yamux_context_new(struct Stream* stream, int amServe
  */
 int libp2p_yamux_send_protocol(struct Stream* stream) {
 	libp2p_logger_debug("yamux", "Sending protocol through stream of type %d and channel %d.\n", stream->stream_type, stream->channel);
+	DEBUG_PRINTF("[yamux debug] send_protocol stream_type=%d\n", stream->stream_type);
 	const char* protocolID = "/yamux/1.0.0\n";
 	struct StreamMessage outgoing;
 	outgoing.data_size = strlen(protocolID);
