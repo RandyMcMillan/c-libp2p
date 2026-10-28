@@ -6,7 +6,7 @@ export SHARED = true
 
 ROOT= $(shell pwd)
 export INCLUDE = -I$(ROOT)/include -I$(ROOT)/c-protobuf -I$(ROOT)/c-multihash/include -I$(ROOT)/c-multiaddr/include
-export CFLAGS = $(INCLUDE) -Wall -O0 -fPIC
+export CFLAGS = $(INCLUDE) -Wall -O0 -fPIC -D_DEFAULT_SOURCE
 
 ifdef DEBUG
 CFLAGS += -g3
