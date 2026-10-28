@@ -475,15 +475,10 @@ struct Stream* libp2p_net_multistream_stream_new(struct Stream* parent_stream, i
 			libp2p_net_multistream_stream_free(out);
 			return NULL;
 		}
-		if (!theyRequested) {
-			int timeout = 5;
-			int counter = 0;
-			// wait for the response (swarm thread will read and update status)
-			while(ctx->status != multistream_status_ack && counter < timeout) {
-				sleep(1);
-				counter++;
-			}
-		}
+		// NOTE: we no longer block here waiting for the multistream ack.
+		// Synchronous callers (e.g. the outbound dialer) drive the ack read
+		// themselves; callers that rely on a swarm listener can use
+		// libp2p_net_multistream_ready().
 	}
 	return out;
 }
