@@ -74,6 +74,8 @@ struct Stream* yamux_channel_new(struct YamuxContext* context, yamux_streamid id
 
 FOUND:;
 
+    struct Stream* channel_stream = libp2p_yamux_channel_stream_new(context->stream, id);
+    libp2p_logger_debug("yamux", "yamux_channel_new: created channel stream %p with channel %d for id %d\n", (void*)channel_stream, channel_stream ? channel_stream->channel : -2, id);
     struct yamux_stream nst = (struct yamux_stream){
         .id          = id,
         .session     = session,
@@ -83,7 +85,7 @@ FOUND:;
         .read_fn = NULL,
         .fin_fn  = NULL,
         .rst_fn  = NULL,
-		.stream  = libp2p_yamux_channel_stream_new(context->stream, id)
+		.stream  = channel_stream
     };
     *y_stream = nst;
 
