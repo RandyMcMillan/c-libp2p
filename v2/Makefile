@@ -1,13 +1,17 @@
 CC = gcc
-CFLAGS = -Wall -Wextra -std=c99 -I include -I ../include -I ../../include -I ../c-protobuf -I ../c-multihash/include -I ../c-multiaddr/include
+CFLAGS = -Wall -Wextra -std=c99 -D_DEFAULT_SOURCE -I include -I ../include -I ../../include -I ../c-protobuf -I ../c-multihash/include -I ../c-multiaddr/include
 LDFLAGS =
 
 ifdef HAS_LSQUIC
 CFLAGS += -DHAS_LSQUIC -I ../../boringssl/include
 LDFLAGS += ../../boringssl/build-c-ipfs/libcrypto.a ../../boringssl/build-c-ipfs/libssl.a
 else
+ifeq ($(shell uname -s),Darwin)
 CFLAGS += -I /opt/homebrew/opt/openssl/include
 LDFLAGS += -L /opt/homebrew/opt/openssl/lib -lssl -lcrypto
+else
+LDFLAGS += -lssl -lcrypto
+endif
 endif
 
 SRCS = src/net/multiaddr.c \
