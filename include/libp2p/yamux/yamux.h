@@ -38,6 +38,12 @@ struct YamuxContext {
 	 */
 	struct StreamMessage* buffered_message;
 	long buffered_message_pos;
+	/**
+	 * Set to 1 once a swarm listener thread is driving this yamux session.
+	 * While 0, synchronous callers (e.g. the outbound dialer) must pump
+	 * yamux frames themselves when reading from a channel buffer.
+	 */
+	int listener_attached;
 };
 
 struct YamuxChannelContext {
@@ -143,6 +149,14 @@ struct YamuxChannelContext* libp2p_yamux_get_channel_context(void* stream_contex
  * @returns the YamuxContext, or NULL on error
  */
 struct YamuxContext* libp2p_yamux_get_context(void* stream_context);
+
+/***
+ * Mark whether a swarm listener thread is driving this yamux session.
+ * When false, channel reads must pump yamux frames themselves.
+ * @param ctx the YamuxContext
+ * @param attached 1 if a listener is attached, 0 otherwise
+ */
+void libp2p_yamux_set_listener_attached(struct YamuxContext* ctx, int attached);
 
 /***
  * Walks down the tree, looking for the nearest YamuxChannelContext
