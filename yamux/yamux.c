@@ -607,7 +607,11 @@ int libp2p_yamux_handle_upgrade(struct Stream* yamux_stream, struct Stream* new_
 		yamux_channel_context->child_stream = new_stream;
 		struct yamux_session_stream* yamux_session_stream = yamux_get_session_stream(yamux_channel_context->yamux_context->session, yamux_channel_context->channel);
 		if (yamux_session_stream == NULL) {
-			libp2p_logger_error("yamux", "Unable to get correct session stream.\n");
+			libp2p_logger_error("yamux", "Unable to get correct session stream for channel %d (session has %zu streams).\n", yamux_channel_context->channel, yamux_channel_context->yamux_context->session->cap_streams);
+			for (size_t i = 0; i < yamux_channel_context->yamux_context->session->cap_streams; ++i) {
+				struct yamux_session_stream* ss = &yamux_channel_context->yamux_context->session->streams[i];
+				libp2p_logger_error("yamux", "  session stream %zu: alive=%d id=%d stream=%p channel=%d\n", i, ss->alive, ss->stream ? ss->stream->id : -1, (void*)(ss->stream ? ss->stream->stream : NULL), (ss->stream && ss->stream->stream) ? ss->stream->stream->channel : -1);
+			}
 			return 0;
 		}
 		yamux_session_stream->stream->stream = new_stream;
