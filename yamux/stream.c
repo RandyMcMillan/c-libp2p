@@ -1,6 +1,7 @@
 
 #include <errno.h>
 #include <memory.h>
+#include <stdio.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <stdlib.h>
@@ -402,28 +403,31 @@ struct yamux_stream* yamux_stream_new() {
  */
 void* yamux_read_method(void* args) {
 	struct YamuxChannelContext* context = (struct YamuxChannelContext*) args;
-	context->read_running = 1;
 	struct StreamMessage* message = NULL;
-	// continue to read until the buffer is empty
-	while (context->buffer->buffer_size > 0) {
+	fprintf(stderr, "[YAMUX_READ_METHOD] started for channel %d child_stream=%p\n", context->channel, (void*)context->child_stream);
+	// Keep reading from the child stream until it closes or times out.
+	// This turns per-frame notifications into a persistent inbound reader,
+	// which is required for protocols like Bitswap that send multiple
+	// length-prefixed messages on a yamux stream opened by the remote peer.
+	for (;;) {
 		if (context->child_stream == NULL || context->child_stream->stream_context == NULL || context->child_stream->read == NULL) {
 			libp2p_logger_error("yamux", "read_method: Child stream not set up properly for channel %d.\n", context->channel);
-			context->read_running = 0;
-			return NULL;
+			break;
 		}
 		struct Stream* child_stream = context->child_stream;
 		if (child_stream == NULL || child_stream->read == NULL) {
 			libp2p_logger_error("yamux", "read_method: Child stream not set up properly for channel %d.\n", context->channel);
-			context->read_running = 0;
-			return NULL;
+			break;
 		}
-		if (context->child_stream->read(context->child_stream->stream_context, &message, 5) && message != NULL) {
+		if (child_stream->read(child_stream->stream_context, &message, 5) && message != NULL) {
 			libp2p_logger_debug("yamux", "read_method: read returned a message of %d bytes. [%s]\n", message->data_size, message->data);
-			int retVal = libp2p_protocol_marshal(message, context->child_stream, context->yamux_context->protocol_handlers);
+			int retVal = libp2p_protocol_marshal(message, child_stream, context->yamux_context->protocol_handlers);
 			libp2p_logger_debug("yamux", "read_method: protocol_marshal returned %d.\n", retVal);
 			libp2p_stream_message_free(message);
+			message = NULL;
 		} else {
-			libp2p_logger_debug("yamux", "read_method: read returned false.\n");
+			libp2p_logger_debug("yamux", "read_method: read returned false for channel %d.\n", context->channel);
+			break;
 		}
 	}
 	context->read_running = 0;
@@ -435,11 +439,19 @@ void* yamux_read_method(void* args) {
  * @param context the YamuxChannelContext
  */
 int libp2p_yamux_notify_child_stream_has_data(struct YamuxChannelContext* context) {
+	fprintf(stderr, "[YAMUX_NOTIFY] channel=%d read_running=%d\n", context->channel, context->read_running);
 	if (!context->read_running) {
+		context->read_running = 1;
 		pthread_t new_thread;
-
-		if (pthread_create(&new_thread, NULL, yamux_read_method, context) == 0)
+		pthread_attr_t attr;
+		pthread_attr_init(&attr);
+		pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+		if (pthread_create(&new_thread, &attr, yamux_read_method, context) == 0) {
+			pthread_attr_destroy(&attr);
 			return 1;
+		}
+		pthread_attr_destroy(&attr);
+		context->read_running = 0;
 	}
 	return 0;
 }
@@ -493,7 +505,7 @@ ssize_t yamux_stream_process(struct yamux_stream* stream, struct yamux_frame* fr
                 	libp2p_logger_error("yamux", "Unable to get channel context for stream %d.\n", frame->streamid);
                 	return -EPROTO;
                 }
-                libp2p_logger_debug("yamux", "writing %d bytes to channel context %d.\n", incoming_size, channelContext->channel);
+                fprintf(stderr, "[YAMUX_STREAM_PROCESS] channel=%d id=%d am_server=%d incoming=%zu child_stream=%p\n", channelContext->channel, stream->id, channelContext->yamux_context->am_server, incoming_size, (void*)channelContext->child_stream);
                 threadsafe_buffer_write(channelContext->buffer, incoming, incoming_size);
                 if(channelContext->child_stream == NULL) {
                 	// we have to handle this ourselves
@@ -504,27 +516,30 @@ ssize_t yamux_stream_process(struct yamux_stream* stream, struct yamux_frame* fr
                 	struct StreamMessage message;
                 	message.data_size = buffer_size;
                 	message.data = buffer;
+                	fprintf(stderr, "[YAMUX_STREAM_PROCESS] channel=%d child_stream=NULL buffer_size=%d valid=%d\n", channelContext->channel, buffer_size, libp2p_protocol_is_valid_protocol(&message, channelContext->yamux_context->protocol_handlers));
                 	if (libp2p_protocol_is_valid_protocol(&message, channelContext->yamux_context->protocol_handlers)) {
                 		// marshal the call
                 		buffer_size = threadsafe_buffer_read(channelContext->buffer, buffer, buffer_size);
                 		message.data_size = buffer_size;
                 		message.data = buffer;
                 		libp2p_protocol_marshal(&message, stream->stream, channelContext->yamux_context->protocol_handlers);
+                		fprintf(stderr, "[YAMUX_STREAM_PROCESS] channel=%d marshalled NULL-child protocol\n", channelContext->channel);
                 	}
                 } else {
                 	// Alert the child protocol that these bytes came in.
                 	// NOTE: We're doing the work in a separate thread
                 	// we tell them, and they need to be smart enough to see if this is a complete message or not
-                	libp2p_yamux_notify_child_stream_has_data(channelContext);
-                	/*
-                	struct StreamMessage* message = NULL;
-                	if (channelContext->child_stream->read(channelContext->child_stream->stream_context, &message, 5) && message != NULL) {
-                		int retVal = libp2p_protocol_marshal(message, channelContext->child_stream, channelContext->yamux_context->protocol_handlers);
-                		libp2p_stream_message_free(message);
-                		if (retVal < 0)
-                			return 0;
+                	// Only do this for inbound streams (opened by the remote peer).
+                	// Outbound streams are read synchronously by the dialer/handshake
+                	// code; a persistent reader here would consume the response before
+                	// the synchronous read can see it.
+                	// Inbound yamux streams are odd-numbered on the server and
+                	// even-numbered on the client.
+                	int is_inbound = (stream->id % 2 == 1) == channelContext->yamux_context->am_server;
+                	fprintf(stderr, "[YAMUX_STREAM_PROCESS] channel=%d child_stream=%p is_inbound=%d\n", channelContext->channel, (void*)channelContext->child_stream, is_inbound);
+                	if (is_inbound) {
+                		libp2p_yamux_notify_child_stream_has_data(channelContext);
                 	}
-                	*/
                 }
                 return incoming_size;
             }
