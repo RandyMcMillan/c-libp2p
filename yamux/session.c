@@ -215,8 +215,12 @@ int yamux_decode(void* context, const uint8_t* incoming, size_t incoming_size, s
     // check yamux version
     if (f.version != YAMUX_VERSION) {
     	libp2p_logger_error("yamux", "Incorrect Yamux version. Expected %d but received %d.\n", YAMUX_VERSION, f.version);
+        fprintf(stderr, "[yamux debug] decode error: bad version %d\n", f.version);
         return 0;
     }
+
+    fprintf(stderr, "[yamux debug] decode frame ver=%d type=%d flags=%u streamid=%u length=%u incoming_size=%zu\n",
+            f.version, f.type, f.flags, f.streamid, f.length, incoming_size);
 
     if (!f.streamid) {// we're not dealing with a stream, we're dealing with something at the yamux protocol level
     	libp2p_logger_debug("yamux", "Received frame with no stream id. We must need to do something at the protocol level.\n");
@@ -269,6 +273,7 @@ int yamux_decode(void* context, const uint8_t* incoming, size_t incoming_size, s
     } else {
     	libp2p_logger_debug("yamux", "yamux_decode: received something for yamux stream %d.\n", f.streamid);
     	// we're handling a stream, not something at the yamux protocol level
+        int found = 0;
         for (size_t i = 0; i < yamux_session->cap_streams; ++i)
         {
             struct yamux_session_stream* ss = &yamux_session->streams[i];
@@ -279,7 +284,9 @@ int yamux_decode(void* context, const uint8_t* incoming, size_t incoming_size, s
 
             if (s->id == f.streamid) // we have a match between the stored stream and the current stream
             {
+                found = 1;
             	libp2p_logger_debug("yamux", "We found our stream id of %d.\n", f.streamid);
+                fprintf(stderr, "[yamux debug] stream %d found state=%d flags=%u\n", f.streamid, s->state, f.flags);
                 if (f.flags & yamux_frame_rst)
                 {
                 	libp2p_logger_debug("yamux", "They are asking that stream %d be reset.\n", f.streamid);
@@ -307,6 +314,7 @@ int yamux_decode(void* context, const uint8_t* incoming, size_t incoming_size, s
                 	// acknowldegement
                     if (s->state != yamux_stream_syn_sent) {
                     	libp2p_logger_debug("yamux", "We received an ack, but it seems we never sent anything!\n");
+                        fprintf(stderr, "[yamux debug] decode error: ack for stream %d but state=%d\n", f.streamid, s->state);
                         return -EPROTO;
                     }
 
@@ -314,6 +322,7 @@ int yamux_decode(void* context, const uint8_t* incoming, size_t incoming_size, s
                 }
                 else if (f.flags) {
                 	libp2p_logger_debug("yamux", "They sent no flags. I don't know what to do. Erroring out.\n");
+                    fprintf(stderr, "[yamux debug] decode error: unknown flags %u for stream %d\n", f.flags, f.streamid);
                     return -EPROTO;
                 }
 
@@ -323,6 +332,9 @@ int yamux_decode(void* context, const uint8_t* incoming, size_t incoming_size, s
                 return (re < 0) ? re : (re + incoming_size);
                 //yamux_pull_message_from_frame(incoming, incoming_size, return_message);
             } // stream id matches
+        }
+        if (!found) {
+            fprintf(stderr, "[yamux debug] stream %d not found; cap_streams=%zu\n", f.streamid, yamux_session->cap_streams);
         }
 
         // This stream is not in my list of streams.
