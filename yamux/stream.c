@@ -19,6 +19,7 @@
 // forward declarations
 struct YamuxContext* libp2p_yamux_get_context(void* context);
 struct YamuxChannelContext* libp2p_yamux_get_channel_context(void* context);
+struct yamux_session_stream* yamux_get_session_stream(struct yamux_session* session, int channel);
 
 /***
  * Create a new stream
@@ -144,6 +145,13 @@ ssize_t yamux_stream_init(struct YamuxChannelContext* channel_ctx)
     };
 
     channel_ctx->state = yamux_stream_syn_sent;
+    struct yamux_session* session = channel_ctx->yamux_context->session;
+    if (session != NULL) {
+        struct yamux_session_stream* ss = yamux_get_session_stream(session, channel_ctx->channel);
+        if (ss != NULL && ss->stream != NULL) {
+            ss->stream->state = yamux_stream_syn_sent;
+        }
+    }
 
     return yamux_write_frame(channel_ctx->yamux_context->stream->stream_context, &f);
 }
