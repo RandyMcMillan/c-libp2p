@@ -399,9 +399,12 @@ struct yamux_session_stream* yamux_get_session_stream(struct yamux_session* sess
     for (size_t i = 0; i < session->cap_streams; ++i)
     {
         struct yamux_session_stream* ss = &session->streams[i];
-        if (ss != NULL && ss->stream != NULL && ss->stream->stream != NULL) {
-            libp2p_logger_debug("yamux", "get_session_stream: slot %zu stream id %d channel %d.\n", i, ss->stream->id, ss->stream->stream->channel);
-            if (ss->stream->stream->channel == channel)
+        if (ss != NULL && ss->stream != NULL) {
+            libp2p_logger_debug("yamux", "get_session_stream: slot %zu stream id %d channel %d.\n", i, ss->stream->id, ss->stream->stream ? ss->stream->stream->channel : -1);
+            // Use the yamux stream id, which is the canonical channel id.  The
+            // child Stream may be upgraded (e.g. multistream -> identify), so
+            // its channel field is not reliable.
+            if (ss->stream->id == channel)
                 return ss;
         }
     }
