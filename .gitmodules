@@ -7,3 +7,6 @@
 [submodule "c-protobuf"]
 	path = c-protobuf
 	url = https://github.com/RandyMcMillan/c-protobuf.git
+[submodule "specs"]
+	path = specs
+	url = https://github.com/libp2p/specs.git
