@@ -53,6 +53,74 @@ static int dialer_pump_yamux_for_channel(struct YamuxContext* ctx, struct YamuxC
 }
 
 /**
+ * Open a protocol stream over an established Yamux session. This creates a
+ * new Yamux channel, negotiates multistream, proposes the given protocol,
+ * and waits for the protocol ack.  The returned stream is ready for
+ * application data.
+ *
+ * NOTE: This runs synchronously and consumes frames from the Yamux session
+ * until the handshake completes.  It is intended for use before the peer is
+ * handed to the swarm listener, or for short-lived outbound protocol streams.
+ *
+ * @param dialer the dialer
+ * @param peer the connected peer (sessionContext->default_stream must be Yamux)
+ * @param protocol the protocol id, including the trailing '\n' (e.g. "/ipfs/id/1.0.0\n")
+ * @param timeout_secs timeout for each handshake step
+ * @returns a multistream-wrapped Yamux channel ready for data, or NULL on error
+ */
+static struct Stream* dialer_open_protocol_stream(const struct Dialer* dialer, struct Libp2pPeer* peer, const char* protocol, int timeout_secs) {
+	if (peer == NULL || peer->sessionContext == NULL || peer->sessionContext->default_stream == NULL
+			|| peer->sessionContext->default_stream->stream_type != STREAM_TYPE_YAMUX) {
+		libp2p_logger_error("dialer", "open_protocol_stream: peer has no yamux session.\n");
+		return NULL;
+	}
+	struct YamuxContext* ctx = libp2p_yamux_get_context(peer->sessionContext->default_stream->stream_context);
+	struct Stream* channel = yamux_channel_new(ctx, 0, NULL);
+	if (channel == NULL || channel->channel == 0) {
+		libp2p_logger_error("dialer", "open_protocol_stream: unable to create yamux channel.\n");
+		return NULL;
+	}
+	struct YamuxChannelContext* channel_ctx = libp2p_yamux_get_channel_context(channel->stream_context);
+	struct Stream* ms = libp2p_net_multistream_stream_new(channel, 0);
+	if (ms == NULL) {
+		libp2p_logger_error("dialer", "open_protocol_stream: unable to create multistream over yamux.\n");
+		return NULL;
+	}
+	// Wait for the multistream ack
+	if (!dialer_pump_yamux_for_channel(ctx, channel_ctx, timeout_secs)) {
+		libp2p_logger_error("dialer", "open_protocol_stream: timed out waiting for multistream ack.\n");
+		return NULL;
+	}
+	struct StreamMessage* ms_ack = NULL;
+	if (!ms->read(ms->stream_context, &ms_ack, timeout_secs) || ms_ack == NULL) {
+		libp2p_logger_error("dialer", "open_protocol_stream: unable to read multistream ack.\n");
+		return NULL;
+	}
+	libp2p_net_multistream_handle_message(ms_ack, ms, NULL);
+	libp2p_stream_message_free(ms_ack);
+	// Propose the protocol
+	struct StreamMessage proto_msg;
+	proto_msg.data = (uint8_t*)protocol;
+	proto_msg.data_size = strlen(protocol);
+	if (!ms->write(ms->stream_context, &proto_msg)) {
+		libp2p_logger_error("dialer", "open_protocol_stream: unable to send protocol id.\n");
+		return NULL;
+	}
+	// Wait for the protocol ack
+	if (!dialer_pump_yamux_for_channel(ctx, channel_ctx, timeout_secs)) {
+		libp2p_logger_error("dialer", "open_protocol_stream: timed out waiting for protocol ack.\n");
+		return NULL;
+	}
+	struct StreamMessage* proto_ack = NULL;
+	if (!ms->read(ms->stream_context, &proto_ack, timeout_secs) || proto_ack == NULL) {
+		libp2p_logger_error("dialer", "open_protocol_stream: unable to read protocol ack.\n");
+		return NULL;
+	}
+	libp2p_stream_message_free(proto_ack);
+	return ms;
+}
+
+/**
  * Create a Dialer with the specified local information
  * @param peer the local peer
  * @param peerstore the local peerstore
@@ -441,6 +509,7 @@ int libp2p_conn_dialer_join_swarm(const struct Dialer* dialer, struct Libp2pPeer
  * @returns the ready-to-use stream
  */
 struct Stream* libp2p_conn_dialer_get_stream(const struct Dialer* dialer, const struct Libp2pPeer* peer, const char* protocol) {
-	// TODO: Implement this method
-	return NULL;
+	if (dialer == NULL || peer == NULL || protocol == NULL)
+		return NULL;
+	return dialer_open_protocol_stream(dialer, (struct Libp2pPeer*)peer, protocol, 10);
 }
