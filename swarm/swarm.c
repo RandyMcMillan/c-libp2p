@@ -11,6 +11,7 @@
 #include "libp2p/swarm/swarm.h"
 #include "libp2p/utils/logger.h"
 #include "libp2p/net/multistream.h"
+#include "libp2p/yamux/yamux.h"
 
 /**
  * Helps pass information to a new thread
@@ -97,6 +98,12 @@ void libp2p_swarm_listen(void* ctx) {
  * @returns true(1) on success, false(0) otherwise
  */
 int libp2p_swarm_add_peer(struct SwarmContext* context, struct Libp2pPeer* peer) {
+	// The swarm listener thread is about to take over yamux frame I/O.
+	if (peer->sessionContext != NULL && peer->sessionContext->default_stream != NULL
+			&& peer->sessionContext->default_stream->stream_type == STREAM_TYPE_YAMUX) {
+		struct YamuxContext* yctx = libp2p_yamux_get_context(peer->sessionContext->default_stream->stream_context);
+		libp2p_yamux_set_listener_attached(yctx, 1);
+	}
 	// spin off a thread for this peer
     struct SwarmSession* swarm_session = (struct SwarmSession*) malloc(sizeof(struct SwarmSession));
     swarm_session->session_context = peer->sessionContext;
