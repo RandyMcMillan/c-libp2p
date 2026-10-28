@@ -605,6 +605,7 @@ int libp2p_yamux_handle_upgrade(struct Stream* yamux_stream, struct Stream* new_
 	if (yamux_channel_context != NULL) {
 		// they've asked to upgrade on a channel. Make them the new default stream for this channel
 		yamux_channel_context->child_stream = new_stream;
+		fprintf(stderr, "[yamux debug] handle_upgrade: yamux_stream=%p channel_ctx=%p channel=%d new_stream=%p new_stream->channel=%d\n", (void*)yamux_stream, (void*)yamux_channel_context, yamux_channel_context->channel, (void*)new_stream, new_stream->channel);
 		struct yamux_session_stream* yamux_session_stream = yamux_get_session_stream(yamux_channel_context->yamux_context->session, yamux_channel_context->channel);
 		if (yamux_session_stream == NULL) {
 			libp2p_logger_error("yamux", "Unable to get correct session stream for channel %d (session has %zu streams).\n", yamux_channel_context->channel, yamux_channel_context->yamux_context->session->cap_streams);
@@ -848,7 +849,7 @@ struct Stream* libp2p_yamux_channel_stream_new(struct Stream* incoming_stream, i
 		out->stream_context = ctx;
 		out->handle_upgrade = libp2p_yamux_handle_upgrade;
 		out->channel = channelNumber;
-		libp2p_logger_debug("yamux", "yamux_channel_stream_new: channelNumber=%d out->channel=%d ctx->channel=%d\n", channelNumber, out->channel, ctx->channel);
+		fprintf(stderr, "[yamux debug] channel_stream_new: channelNumber=%d out=%p out->channel=%d ctx->channel=%d\n", channelNumber, (void*)out, out->channel, ctx->channel);
 	}
 	return out;
 }
