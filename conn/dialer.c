@@ -319,8 +319,10 @@ int libp2p_conn_dialer_join_swarm(const struct Dialer* dialer, struct Libp2pPeer
 						libp2p_net_multistream_handle_message(ms_ack, yamux_multistream, NULL);
 						libp2p_stream_message_free(ms_ack);
 						DEBUG_PRINTF("[dialer debug] multistream over yamux ready (channel %d)\n", new_channel->channel);
-						// Send our Identify (protocol id + protobuf)
-						struct Stream* identify_stream = libp2p_identify_stream_new(yamux_multistream, identify, 0);
+						// Send our Identify protocol id, wait for ack, then send the protobuf.
+						// Kubo follows standard multistream-select, so protocol id and data must
+						// be separate length-prefixed messages.
+						struct Stream* identify_stream = libp2p_identify_stream_new(yamux_multistream, identify, 1);
 						if (identify_stream != NULL) {
 							// Read remote's protocol ack
 							if (!dialer_pump_yamux_for_channel(ctx, channel_ctx, 10)) {
@@ -330,6 +332,21 @@ int libp2p_conn_dialer_join_swarm(const struct Dialer* dialer, struct Libp2pPeer
 							struct StreamMessage* ack = NULL;
 							if (yamux_multistream->read(yamux_multistream->stream_context, &ack, 5) && ack != NULL) {
 								libp2p_stream_message_free(ack);
+								// Send our Identify protobuf
+								size_t identify_pb_len = 0;
+								uint8_t identify_pb[6000];
+								if (!libp2p_identify_protobuf_encode(identify, identify_pb, sizeof(identify_pb), &identify_pb_len)) {
+									libp2p_logger_error("dialer", "Unable to encode Identify protobuf.\n");
+									return 0;
+								}
+								struct StreamMessage identify_msg;
+								identify_msg.data = identify_pb;
+								identify_msg.data_size = identify_pb_len;
+								if (!yamux_multistream->write(yamux_multistream->stream_context, &identify_msg)) {
+									libp2p_logger_error("dialer", "Unable to send Identify protobuf over yamux.\n");
+									return 0;
+								}
+								DEBUG_PRINTF("[dialer debug] sent Identify protobuf of %zu bytes\n", identify_pb_len);
 								// Read remote's Identify protobuf
 								if (!dialer_pump_yamux_for_channel(ctx, channel_ctx, 10)) {
 									libp2p_logger_error("dialer", "Timed out waiting for Identify message over yamux.\n");

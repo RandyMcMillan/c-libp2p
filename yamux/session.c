@@ -368,7 +368,7 @@ int yamux_decode(void* context, const uint8_t* incoming, size_t incoming_size, s
 					yamux_stream_window_update(channelContext, ss->stream->window_size);
 				}
 				// TODO: Start negotiations of multistream
-				struct Stream* multistream = libp2p_net_multistream_stream_new(yamuxChannelStream, 0);
+				struct Stream* multistream = libp2p_net_multistream_stream_new(yamuxChannelStream, 1);
 				if (multistream != NULL) {
 					libp2p_logger_debug("yamux", "Successfully sent the multistream id on stream %d.\n", f.streamid);
 					// this should already be done
