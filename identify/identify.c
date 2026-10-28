@@ -166,12 +166,13 @@ int libp2p_identify_array_add_item(char ***array, char *item) {
 	if (array && item) {
 		if (*array) {
 			// count itens already in.
-			while (*array[count++]);
+			while ((*array)[count++]) {
+			}
 		}
 		// alloc the necessary array count or realloc more if alread allocated.
 		*array = realloc(*array, sizeof(char*) * (count + 2)); // 2, the new and the NULL
-		*array[count++] = item;
-		*array[count] = NULL;
+		(*array)[count++] = item;
+		(*array)[count] = NULL;
 	}
 	return count;
 }
