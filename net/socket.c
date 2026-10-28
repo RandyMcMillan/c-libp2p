@@ -196,6 +196,73 @@ int socket_connect4_with_timeout(int s, uint32_t ip, uint16_t port, int timeout_
    return retVal;
 }
 
+/***
+ * start a client connection over IPv6.
+ * @param s the socket number (must be AF_INET6)
+ * @param ip the ipv6 address text
+ * @param port the port number
+ * @param timeout_secs the number of seconds before timeout
+ * @return 0 on success, otherwise -1
+ */
+int socket_connect6_with_timeout(int s, const char* ip, uint16_t port, int timeout_secs)
+{
+   struct sockaddr_in6 sa;
+   long args;
+   long orig_args;
+
+   memset(&sa, 0, sizeof sa);
+   sa.sin6_family = AF_INET6;
+   sa.sin6_port = htons(port);
+   if (inet_pton(AF_INET6, ip, &sa.sin6_addr) != 1)
+      return -1;
+
+   orig_args = fcntl(s, F_GETFL, NULL);
+   if (orig_args < 0)
+      return -1;
+   args = orig_args | O_NONBLOCK;
+   if (args != orig_args) {
+      if (fcntl(s, F_SETFL, args) < 0)
+         return -1;
+   }
+
+   int retVal = connect(s, (struct sockaddr *) &sa, sizeof sa);
+   if (retVal == -1 && errno == EINPROGRESS) {
+      fd_set wfds;
+      struct timeval tv;
+      int tried_secs = 0;
+      while (tried_secs < timeout_secs) {
+         FD_ZERO(&wfds);
+         FD_SET(s, &wfds);
+         tv.tv_sec = 1;
+         tv.tv_usec = 0;
+         retVal = select(s + 1, NULL, &wfds, NULL, &tv);
+         if (retVal > 0 && FD_ISSET(s, &wfds)) {
+            int so_error = 0;
+            socklen_t len = sizeof(so_error);
+            if (getsockopt(s, SOL_SOCKET, SO_ERROR, &so_error, &len) == 0 && so_error == 0) {
+               retVal = 0;
+               break;
+            }
+            errno = so_error;
+            retVal = -1;
+            break;
+         } else if (retVal == -1 && errno != EINTR) {
+            break;
+         }
+         tried_secs++;
+      }
+   } else if (retVal == -1 && errno == EISCONN) {
+      retVal = 0;
+   }
+
+   if (args != orig_args) {
+      args = fcntl(s, F_GETFL, NULL);
+      args &= (~O_NONBLOCK);
+      fcntl(s, F_SETFL, args);
+   }
+   return retVal;
+}
+
 /**
  *  bind and listen to a socket.
  *  @param s socket file descriptor

@@ -7,6 +7,7 @@ struct MultiAddress {
     char* raw_string;
     char* ip;
     uint16_t port;
+    int family; /* AF_INET or AF_INET6 */
 };
 
 struct MultiAddress* libp2p_multiaddr_new_from_string(const char* str);

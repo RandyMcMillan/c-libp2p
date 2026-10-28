@@ -7,6 +7,9 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/ioctl.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 #include <unistd.h>
 #include <errno.h>
 #include "libp2p/net/stream.h"
@@ -236,7 +239,13 @@ struct Stream* libp2p_net_connection_new(int fd, char* ip, int port, struct Sess
 	struct Stream* out = libp2p_net_connection_established(fd, ip, port, session_context);
 	if (out != NULL) {
 		struct ConnectionContext* ctx = (struct ConnectionContext*) out->stream_context;
-		int connect_ret = socket_connect4_with_timeout(ctx->socket_descriptor, hostname_to_ip(ip), port, 10);
+		int connect_ret;
+		struct in6_addr addr6;
+		if (inet_pton(AF_INET6, ip, &addr6) == 1) {
+			connect_ret = socket_connect6_with_timeout(ctx->socket_descriptor, ip, port, 10);
+		} else {
+			connect_ret = socket_connect4_with_timeout(ctx->socket_descriptor, hostname_to_ip(ip), port, 10);
+		}
 		if (!connect_ret == 0) {
 			// unable to connect
 			libp2p_stream_free(out);

@@ -77,27 +77,39 @@ struct Libp2pV2Stream* libp2p_net_tcp_wrap_fd(int fd) {
 }
 
 struct Libp2pV2Stream* libp2p_net_tcp_dial(const char* ip_address, uint16_t port) {
-    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (ip_address == NULL)
+        return NULL;
+
+    char port_str[6];
+    snprintf(port_str, sizeof(port_str), "%u", port);
+
+    struct addrinfo hints;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_flags = AI_NUMERICHOST;
+
+    struct addrinfo* res = NULL;
+    int gai_err = getaddrinfo(ip_address, port_str, &hints, &res);
+    if (gai_err != 0 || res == NULL) {
+        libp2p_v2_logger_error("tcp", "getaddrinfo for %s:%s failed: %s\n", ip_address, port_str, gai_strerror(gai_err));
+        return NULL;
+    }
+
+    int fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
     if (fd < 0) {
         libp2p_v2_logger_error("tcp", "socket creation failed: %s\n", strerror(errno));
+        freeaddrinfo(res);
         return NULL;
     }
 
-    struct sockaddr_in addr;
-    memset(&addr, 0, sizeof(addr));
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons(port);
-    if (inet_pton(AF_INET, ip_address, &addr.sin_addr) <= 0) {
-        libp2p_v2_logger_error("tcp", "invalid IP address: %s\n", ip_address);
-        close(fd);
-        return NULL;
-    }
-
-    if (connect(fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+    if (connect(fd, res->ai_addr, res->ai_addrlen) < 0) {
         libp2p_v2_logger_error("tcp", "connect to %s:%u failed: %s\n", ip_address, port, strerror(errno));
         close(fd);
+        freeaddrinfo(res);
         return NULL;
     }
+    freeaddrinfo(res);
 
     struct tcp_stream_context* ctx = (struct tcp_stream_context*)malloc(sizeof(struct tcp_stream_context));
     if (ctx == NULL) {

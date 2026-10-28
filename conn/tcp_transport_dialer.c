@@ -1,4 +1,6 @@
 #include <stdlib.h>
+#include <string.h>
+#include <sys/socket.h>
 #include <netdb.h>
 #include <arpa/inet.h>
 
@@ -18,10 +20,21 @@ int libp2p_conn_tcp_can_handle(const struct MultiAddress* addr) {
 }
 
 struct Stream* libp2p_conn_tcp_dial(const struct TransportDialer* transport_dialer, const struct MultiAddress* addr) {
-	int socket_descriptor = socket_open4();
-	char* ip;
+	char* ip = NULL;
 	int port = multiaddress_get_ip_port(addr);
 	if (!multiaddress_get_ip_address(addr, &ip)) {
+		return NULL;
+	}
+
+	int family = multiaddress_get_ip_family(addr);
+	int socket_descriptor;
+	if (family == AF_INET6) {
+		socket_descriptor = socket(AF_INET6, SOCK_STREAM, 0);
+	} else {
+		socket_descriptor = socket_open4();
+	}
+	if (socket_descriptor < 0) {
+		free(ip);
 		return NULL;
 	}
 

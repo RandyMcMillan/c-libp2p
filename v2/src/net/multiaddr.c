@@ -1,6 +1,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
 
 #include "libp2p/net/multiaddr.h"
 #include "libp2p/utils/logger.h"
@@ -14,6 +16,7 @@ struct MultiAddress* libp2p_multiaddr_new_from_string(const char* str) {
         return NULL;
 
     ma->raw_string = strdup(str);
+    ma->family = AF_INET;
 
     char buffer[256];
     strncpy(buffer, str, sizeof(buffer) - 1);
@@ -25,6 +28,13 @@ struct MultiAddress* libp2p_multiaddr_new_from_string(const char* str) {
             token = strtok(NULL, "/");
             if (token != NULL) {
                 ma->ip = strdup(token);
+                ma->family = AF_INET;
+            }
+        } else if (strcmp(token, "ip6") == 0) {
+            token = strtok(NULL, "/");
+            if (token != NULL) {
+                ma->ip = strdup(token);
+                ma->family = AF_INET6;
             }
         } else if (strcmp(token, "tcp") == 0) {
             token = strtok(NULL, "/");
