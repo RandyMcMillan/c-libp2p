@@ -1,5 +1,7 @@
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
+#include <unistd.h>
 /**
  * Functions for handling the local dialer
  */
@@ -23,6 +25,32 @@ int libp2p_net_multistream_handle_message(const struct StreamMessage* msg, struc
 #include "libp2p/utils/debug.h"
 
 struct TransportDialer* libp2p_conn_tcp_transport_dialer_new(char* peer_id, struct RsaPrivateKey* private_key);
+int libp2p_yamux_read(void* stream_context, struct StreamMessage** message, int timeout_secs);
+
+/**
+ * Pump yamux frames until the requested channel has data in its buffer.
+ * Used during the synchronous outbound Identify exchange, before the swarm
+ * listener thread is started.
+ */
+static int dialer_pump_yamux_for_channel(struct YamuxContext* ctx, struct YamuxChannelContext* channel, int timeout_secs) {
+	if (ctx == NULL || channel == NULL || channel->buffer == NULL)
+		return 0;
+	time_t start = time(NULL);
+	while (difftime(time(NULL), start) < timeout_secs) {
+		if (channel->buffer->buffer_size > 0)
+			return 1;
+		struct StreamMessage* msg = NULL;
+		if (libp2p_yamux_read(ctx, &msg, 1)) {
+			if (msg != NULL)
+				libp2p_stream_message_free(msg);
+			if (channel->buffer->buffer_size > 0)
+				return 1;
+		} else {
+			usleep(100000);
+		}
+	}
+	return channel->buffer->buffer_size > 0;
+}
 
 /**
  * Create a Dialer with the specified local information
@@ -262,12 +290,9 @@ int libp2p_conn_dialer_join_swarm(const struct Dialer* dialer, struct Libp2pPeer
 				return 0;
 			}
 			DEBUG_PRINTF("[dialer debug] yamux ready, default_stream type=%d\n", peer->sessionContext->default_stream->stream_type);
-			// Now that the Noise-secured multistream and yamux are ready, hand the
-			// peer off to the swarm. The swarm thread will drive yamux frame I/O.
-			libp2p_swarm_add_peer(dialer->swarm, peer);
-			// the rest should be done on another thread
-			// we have our swarm connection. Now we ask for some "channels"
-			// id over multistream over yamux
+			// Run Identify over yamux synchronously before handing the peer to the
+			// swarm.  If the swarm listener starts first, it races with the dialer
+			// for reads on the shared Noise/Yamux stream and corrupts the session.
 			const struct Libp2pProtocolHandler* handler = libp2p_protocol_get_handler(dialer->swarm->protocol_handlers, "/ipfs/id/1.0.0\n");
 			if (handler != NULL) {
 				Identify* identify = handler->context;
@@ -276,20 +301,40 @@ int libp2p_conn_dialer_join_swarm(const struct Dialer* dialer, struct Libp2pPeer
 					// first get a new frame. It should be ready to go
 					struct Stream* new_channel = yamux_channel_new(ctx, 0, NULL);
 					if (new_channel != NULL && new_channel->channel > 0) {
+						struct YamuxChannelContext* channel_ctx = libp2p_yamux_get_channel_context(new_channel->stream_context);
 						// then get a multistream
 						struct Stream* yamux_multistream = libp2p_net_multistream_stream_new(new_channel, 0);
-						if (!libp2p_net_multistream_ready(new_channel->stream_context, 10)) {
-							libp2p_logger_error("dialer", "Unable to get multistream over yamux into the ready status.\n");
+						// Wait for the remote's multistream ack and mark the
+						// multistream ready.  We cannot rely on the swarm listener
+						// because the peer has not been added to the swarm yet.
+						if (!dialer_pump_yamux_for_channel(ctx, channel_ctx, 10)) {
+							libp2p_logger_error("dialer", "Timed out waiting for multistream ack over yamux.\n");
 							return 0;
 						}
+						struct StreamMessage* ms_ack = NULL;
+						if (!yamux_multistream->read(yamux_multistream->stream_context, &ms_ack, 5) || ms_ack == NULL) {
+							libp2p_logger_error("dialer", "Unable to read multistream ack over yamux.\n");
+							return 0;
+						}
+						libp2p_net_multistream_handle_message(ms_ack, yamux_multistream, NULL);
+						libp2p_stream_message_free(ms_ack);
+						DEBUG_PRINTF("[dialer debug] multistream over yamux ready (channel %d)\n", new_channel->channel);
 						// Send our Identify (protocol id + protobuf)
 						struct Stream* identify_stream = libp2p_identify_stream_new(yamux_multistream, identify, 0);
 						if (identify_stream != NULL) {
 							// Read remote's protocol ack
+							if (!dialer_pump_yamux_for_channel(ctx, channel_ctx, 10)) {
+								libp2p_logger_error("dialer", "Timed out waiting for Identify ack over yamux.\n");
+								return 0;
+							}
 							struct StreamMessage* ack = NULL;
 							if (yamux_multistream->read(yamux_multistream->stream_context, &ack, 5) && ack != NULL) {
 								libp2p_stream_message_free(ack);
 								// Read remote's Identify protobuf
+								if (!dialer_pump_yamux_for_channel(ctx, channel_ctx, 10)) {
+									libp2p_logger_error("dialer", "Timed out waiting for Identify message over yamux.\n");
+									return 0;
+								}
 								struct StreamMessage* remote_identify = NULL;
 								if (yamux_multistream->read(yamux_multistream->stream_context, &remote_identify, 5) && remote_identify != NULL) {
 									Identify* remote = NULL;
@@ -338,6 +383,9 @@ int libp2p_conn_dialer_join_swarm(const struct Dialer* dialer, struct Libp2pPeer
 					libp2p_logger_error("dialer", "Expected a yamux context, but got a context of type %d.\n", peer->sessionContext->default_stream->stream_type);
 				}
 			}
+			// Now that Identify is complete, hand the peer off to the swarm.
+			// The swarm thread will drive yamux frame I/O for the remaining lifetime.
+			libp2p_swarm_add_peer(dialer->swarm, peer);
 			// kademlia over yamux
 			//libp2p_yamux_stream_add(new_stream->stream_context, libp2p_kademlia_stream_new(new_stream));
 			// circuit relay over yamux
