@@ -230,17 +230,32 @@ enum yamux_frame_flags get_flags(void* context) {
 		return 0;
 	if ( ((char*)context)[0] == YAMUX_CHANNEL_CONTEXT) {
 		struct YamuxChannelContext* ctx = (struct YamuxChannelContext*)context;
+	    enum yamux_frame_flags flags = 0;
+	    enum yamux_stream_state new_state = ctx->state;
 	    switch (ctx->state)
 	    {
 	        case yamux_stream_inited:
-	            ctx->state = yamux_stream_syn_sent;
-	            return yamux_frame_syn;
+	            new_state = yamux_stream_syn_sent;
+	            flags = yamux_frame_syn;
+	            break;
 	        case yamux_stream_syn_recv:
-	            ctx->state = yamux_stream_est;
-	            return yamux_frame_ack;
+	            new_state = yamux_stream_est;
+	            flags = yamux_frame_ack;
+	            break;
 	        default:
-	            return 0;
+	            break;
 	    }
+	    if (flags != 0) {
+	        ctx->state = new_state;
+	        struct yamux_session* session = ctx->yamux_context->session;
+	        if (session != NULL) {
+	            struct yamux_session_stream* ss = yamux_get_session_stream(session, ctx->channel);
+	            if (ss != NULL && ss->stream != NULL) {
+	                ss->stream->state = new_state;
+	            }
+	        }
+	    }
+	    return flags;
 	} else if ( ((char*)context)[0] == YAMUX_CONTEXT) {
 		struct YamuxContext* ctx = (struct YamuxContext*)context;
 	    switch (ctx->state)
