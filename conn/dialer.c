@@ -36,17 +36,19 @@ static int dialer_pump_yamux_for_channel(struct YamuxContext* ctx, struct YamuxC
 	if (ctx == NULL || channel == NULL || channel->buffer == NULL)
 		return 0;
 	time_t start = time(NULL);
-	// Keep draining yamux frames for the full timeout so that fragmented or
-	// back-to-back frames for this channel are all buffered before the caller
-	// attempts a synchronous read.
+	// Pump yamux frames only until the requested channel has buffered data.
+	// Draining additional frames here races with the remote's inbound streams
+	// and can corrupt the yamux session before the swarm listener takes over.
 	while (difftime(time(NULL), start) < timeout_secs) {
+		if (channel->buffer->buffer_size > 0)
+			return 1;
 		struct StreamMessage* msg = NULL;
 		if (libp2p_yamux_read(ctx, &msg, 1)) {
 			if (msg != NULL)
 				libp2p_stream_message_free(msg);
-		} else {
 			if (channel->buffer->buffer_size > 0)
-				break;
+				return 1;
+		} else {
 			usleep(100000);
 		}
 	}
@@ -422,7 +424,7 @@ int libp2p_conn_dialer_join_swarm(const struct Dialer* dialer, struct Libp2pPeer
 									return 0;
 								}
 								struct StreamMessage* remote_identify = NULL;
-								if (yamux_multistream->read(yamux_multistream->stream_context, &remote_identify, 5) && remote_identify != NULL) {
+								if (yamux_multistream->read(yamux_multistream->stream_context, &remote_identify, 30) && remote_identify != NULL) {
 									Identify* remote = NULL;
 									if (libp2p_identify_protobuf_decode(remote_identify->data, remote_identify->data_size, &remote)) {
 										// Update peerstore with received listen addresses
@@ -469,19 +471,9 @@ int libp2p_conn_dialer_join_swarm(const struct Dialer* dialer, struct Libp2pPeer
 					libp2p_logger_error("dialer", "Expected a yamux context, but got a context of type %d.\n", peer->sessionContext->default_stream->stream_type);
 				}
 			}
-			// Open a Bitswap 1.2.0 stream before handing the peer to the swarm, so
-			// we don't race with the swarm listener for yamux frames.
-			if (peer->sessionContext->default_stream->stream_type == STREAM_TYPE_YAMUX) {
-				struct Stream* bitswap_stream = dialer_open_protocol_stream(dialer, peer, "/ipfs/bitswap/1.2.0\n", 10);
-				if (bitswap_stream != NULL) {
-					peer->sessionContext->bitswap_stream = bitswap_stream;
-					DEBUG_PRINTF("[dialer debug] bitswap 1.2.0 stream open for peer %s\n", peer->id ? peer->id : "(null)");
-				} else {
-					libp2p_logger_error("dialer", "Unable to open Bitswap 1.2.0 stream for peer %s.\n", peer->id ? peer->id : "(null)");
-				}
-			}
 			// Now that Identify is complete, hand the peer off to the swarm.
 			// The swarm thread will drive yamux frame I/O for the remaining lifetime.
+			// Bitswap 1.2.0 streams are opened lazily by the application layer.
 			libp2p_swarm_add_peer(dialer->swarm, peer);
 			// kademlia over yamux
 			//libp2p_yamux_stream_add(new_stream->stream_context, libp2p_kademlia_stream_new(new_stream));
