@@ -848,6 +848,7 @@ struct Stream* libp2p_yamux_channel_stream_new(struct Stream* incoming_stream, i
 		out->stream_context = ctx;
 		out->handle_upgrade = libp2p_yamux_handle_upgrade;
 		out->channel = channelNumber;
+		libp2p_logger_debug("yamux", "yamux_channel_stream_new: channelNumber=%d out->channel=%d ctx->channel=%d\n", channelNumber, out->channel, ctx->channel);
 	}
 	return out;
 }
