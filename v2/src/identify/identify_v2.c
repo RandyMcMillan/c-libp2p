@@ -3,6 +3,8 @@
 #include <string.h>
 
 #include "libp2p/identify/identify_v2.h"
+#include "libp2p/crypto/key.h"
+#include "libp2p/crypto/peerutils.h"
 #include "libp2p/utils/logger.h"
 #include "protobuf.h"
 
@@ -202,7 +204,34 @@ int libp2p_identify_receive(struct Libp2pV2Stream* stream, struct Libp2pPeer* pe
         libp2p_v2_logger_info("identify", "Received identify from peer: agent=%s proto=%s\n",
                            info->agent_version ? info->agent_version : "?",
                            info->protocol_version ? info->protocol_version : "?");
-        /* TODO: populate peer->peer_id from public_key, add listen_addrs to peer */
+        /* Populate peer from public_key and listen_addrs */
+        if (peer != NULL && info->public_key != NULL && info->public_key_len > 0) {
+            struct PublicKey* pubkey = NULL;
+            if (libp2p_crypto_public_key_protobuf_decode((unsigned char*)info->public_key, info->public_key_len, &pubkey)) {
+                char* peer_id = NULL;
+                if (libp2p_crypto_public_key_to_peer_id(pubkey, &peer_id) && peer_id != NULL) {
+                    if (peer->peer_id != NULL)
+                        free(peer->peer_id);
+                    peer->peer_id = peer_id;
+                }
+                libp2p_crypto_public_key_free(pubkey);
+            }
+            if (info->listen_addrs != NULL && info->listen_addrs_count > 0) {
+                for (size_t i = 0; i < info->listen_addrs_count; i++) {
+                    struct MultiAddress* ma = libp2p_multiaddr_new_from_string(info->listen_addrs[i]);
+                    if (ma != NULL) {
+                        struct Libp2pLinkedList* node = (struct Libp2pLinkedList*)malloc(sizeof(struct Libp2pLinkedList));
+                        if (node != NULL) {
+                            node->item = ma;
+                            node->next = peer->addr_head;
+                            peer->addr_head = node;
+                        } else {
+                            libp2p_multiaddr_free(ma);
+                        }
+                    }
+                }
+            }
+        }
     }
 
     libp2p_identify_info_free(info);

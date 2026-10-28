@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <pthread.h>
 
 #include <openssl/evp.h>
 #include <openssl/hmac.h>
@@ -40,6 +41,7 @@ struct NoiseStreamContext {
     unsigned char write_key[NOISE_KEYLEN];
     uint64_t read_nonce;
     uint64_t write_nonce;
+    pthread_mutex_t rw_mutex;
 };
 
 static void noise_hexdump(const char* label, const unsigned char* data, size_t len) {
@@ -194,24 +196,33 @@ static ssize_t noise_stream_read(struct Libp2pV2Stream* stream, unsigned char* b
 
     struct NoiseStreamContext* ctx = (struct NoiseStreamContext*)stream->stream_context;
 
+    pthread_mutex_lock(&ctx->rw_mutex);
+
     unsigned char frame_header[2];
     ssize_t ret = ctx->raw_stream->read(ctx->raw_stream, frame_header, 2);
-    if (ret != 2)
+    if (ret != 2) {
+        pthread_mutex_unlock(&ctx->rw_mutex);
         return -1;
+    }
 
     uint16_t frame_len = (frame_header[0] << 8) | frame_header[1];
-    if (frame_len > 65535 || frame_len < NOISE_TAGLEN)
+    if (frame_len > 65535 || frame_len < NOISE_TAGLEN) {
+        pthread_mutex_unlock(&ctx->rw_mutex);
         return -1;
+    }
 
     unsigned char* cipher_buf = malloc(frame_len);
-    if (!cipher_buf)
+    if (!cipher_buf) {
+        pthread_mutex_unlock(&ctx->rw_mutex);
         return -1;
+    }
 
     size_t total_read = 0;
     while (total_read < frame_len) {
         ret = ctx->raw_stream->read(ctx->raw_stream, cipher_buf + total_read, frame_len - total_read);
         if (ret <= 0) {
             free(cipher_buf);
+            pthread_mutex_unlock(&ctx->rw_mutex);
             return -1;
         }
         total_read += ret;
@@ -220,16 +231,19 @@ static ssize_t noise_stream_read(struct Libp2pV2Stream* stream, unsigned char* b
     size_t plaintext_len = frame_len - NOISE_TAGLEN;
     if (plaintext_len > count) {
         free(cipher_buf);
+        pthread_mutex_unlock(&ctx->rw_mutex);
         return -1;
     }
 
     if (!noise_decrypt(ctx->read_key, ctx->read_nonce, NULL, 0, cipher_buf, frame_len, buf)) {
         free(cipher_buf);
+        pthread_mutex_unlock(&ctx->rw_mutex);
         return -1;
     }
 
     ctx->read_nonce++;
     free(cipher_buf);
+    pthread_mutex_unlock(&ctx->rw_mutex);
     return (ssize_t)plaintext_len;
 }
 
@@ -239,27 +253,35 @@ static ssize_t noise_stream_write(struct Libp2pV2Stream* stream, const unsigned 
 
     struct NoiseStreamContext* ctx = (struct NoiseStreamContext*)stream->stream_context;
 
+    pthread_mutex_lock(&ctx->rw_mutex);
+
     size_t max_payload = 65535 - NOISE_TAGLEN;
     if (count > max_payload)
         count = max_payload;
 
     unsigned char ciphertext[65535];
-    if (!noise_encrypt(ctx->write_key, ctx->write_nonce, NULL, 0, buf, count, ciphertext))
+    if (!noise_encrypt(ctx->write_key, ctx->write_nonce, NULL, 0, buf, count, ciphertext)) {
+        pthread_mutex_unlock(&ctx->rw_mutex);
         return -1;
+    }
 
     unsigned char frame_header[2];
     uint16_t frame_len = (uint16_t)(count + NOISE_TAGLEN);
     frame_header[0] = (frame_len >> 8) & 0xFF;
     frame_header[1] = frame_len & 0xFF;
 
-    if (ctx->raw_stream->write(ctx->raw_stream, frame_header, 2) != 2)
+    if (ctx->raw_stream->write(ctx->raw_stream, frame_header, 2) != 2) {
+        pthread_mutex_unlock(&ctx->rw_mutex);
         return -1;
+    }
 
     ssize_t ret = ctx->raw_stream->write(ctx->raw_stream, ciphertext, frame_len);
     if (ret == (ssize_t)frame_len) {
         ctx->write_nonce++;
+        pthread_mutex_unlock(&ctx->rw_mutex);
         return (ssize_t)count;
     }
+    pthread_mutex_unlock(&ctx->rw_mutex);
     return -1;
 }
 
@@ -267,6 +289,7 @@ static void noise_stream_close(struct Libp2pV2Stream* stream) {
     if (!stream) return;
     struct NoiseStreamContext* ctx = (struct NoiseStreamContext*)stream->stream_context;
     if (ctx) {
+        pthread_mutex_destroy(&ctx->rw_mutex);
         if (ctx->raw_stream)
             ctx->raw_stream->close(ctx->raw_stream);
         free(ctx);
@@ -703,6 +726,7 @@ struct Libp2pV2Stream* libp2p_noise_handshake_raw(struct Libp2pV2Stream* raw_str
     memcpy(nctx->read_key, split_keys + NOISE_HASHLEN, NOISE_KEYLEN);
     nctx->write_nonce = 0;
     nctx->read_nonce = 0;
+    pthread_mutex_init(&nctx->rw_mutex, NULL);
 
     struct Libp2pV2Stream* stream = calloc(1, sizeof(struct Libp2pV2Stream));
     if (!stream) {
@@ -912,6 +936,7 @@ struct Libp2pV2Stream* libp2p_noise_handshake_responder_raw(struct Libp2pV2Strea
     memcpy(nctx->write_key, split_keys + NOISE_HASHLEN, NOISE_KEYLEN);
     nctx->write_nonce = 0;
     nctx->read_nonce = 0;
+    pthread_mutex_init(&nctx->rw_mutex, NULL);
 
     struct Libp2pV2Stream* stream = calloc(1, sizeof(struct Libp2pV2Stream));
     if (!stream) {

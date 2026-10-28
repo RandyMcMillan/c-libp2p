@@ -18,6 +18,7 @@ int libp2p_net_multistream_handle_message(const struct StreamMessage* msg, struc
 #include "libp2p/yamux/yamux.h"
 #include "libp2p/identify/identify.h"
 #include "libp2p/peer/peerstore.h"
+#include "libp2p/crypto/peerutils.h"
 
 #include "libp2p/utils/debug.h"
 
@@ -261,9 +262,6 @@ int libp2p_conn_dialer_join_swarm(const struct Dialer* dialer, struct Libp2pPeer
 				return 0;
 			}
 			DEBUG_PRINTF("[dialer debug] yamux ready, default_stream type=%d\n", peer->sessionContext->default_stream->stream_type);
-			// Now that the Noise-secured multistream and yamux are ready, hand the
-			// peer off to the swarm. The swarm thread will drive yamux frame I/O.
-			libp2p_swarm_add_peer(dialer->swarm, peer);
 			// the rest should be done on another thread
 			// we have our swarm connection. Now we ask for some "channels"
 			// id over multistream over yamux
@@ -281,8 +279,57 @@ int libp2p_conn_dialer_join_swarm(const struct Dialer* dialer, struct Libp2pPeer
 							libp2p_logger_error("dialer", "Unable to get multistream over yamux into the ready status.\n");
 							return 0;
 						}
-						// then get an identify
-						libp2p_identify_stream_new(yamux_multistream, identify, 1);
+						// Send our Identify (protocol id + protobuf)
+						struct Stream* identify_stream = libp2p_identify_stream_new(yamux_multistream, identify, 0);
+						if (identify_stream != NULL) {
+							// Read remote's protocol ack
+							struct StreamMessage* ack = NULL;
+							if (yamux_multistream->read(yamux_multistream->stream_context, &ack, 5) && ack != NULL) {
+								libp2p_stream_message_free(ack);
+								// Read remote's Identify protobuf
+								struct StreamMessage* remote_identify = NULL;
+								if (yamux_multistream->read(yamux_multistream->stream_context, &remote_identify, 5) && remote_identify != NULL) {
+									Identify* remote = NULL;
+									if (libp2p_identify_protobuf_decode(remote_identify->data, remote_identify->data_size, &remote)) {
+										// Update peerstore with received listen addresses
+										if (dialer->peerstore != NULL && peer->id != NULL && peer->id_size > 0 && remote->ListenAddrs != NULL) {
+											struct Libp2pPeer temp_peer;
+											memset(&temp_peer, 0, sizeof(temp_peer));
+											temp_peer.id = peer->id;
+											temp_peer.id_size = peer->id_size;
+											for (int i = 0; remote->ListenAddrs[i] != NULL; i++) {
+												struct MultiAddress* ma = multiaddress_new_from_string(remote->ListenAddrs[i]);
+												if (ma != NULL) {
+													struct Libp2pLinkedList* node = libp2p_utils_linked_list_new();
+													if (node != NULL) {
+														node->item = ma;
+														node->next = temp_peer.addr_head;
+														temp_peer.addr_head = node;
+													} else {
+														multiaddress_free(ma);
+													}
+												}
+											}
+											struct Libp2pPeer* stored = libp2p_peerstore_get_peer(dialer->peerstore, (unsigned char*)peer->id, peer->id_size);
+											if (stored != NULL) {
+												libp2p_peerstore_update_addresses(stored, &temp_peer);
+											}
+											// free temp address list
+											struct Libp2pLinkedList* cur = temp_peer.addr_head;
+											while (cur != NULL) {
+												struct Libp2pLinkedList* next = cur->next;
+												if (cur->item != NULL)
+													multiaddress_free((struct MultiAddress*)cur->item);
+												free(cur);
+												cur = next;
+											}
+										}
+										libp2p_identify_free(remote);
+									}
+									libp2p_stream_message_free(remote_identify);
+								}
+							}
+						}
 					}
 				} else {
 					libp2p_logger_error("dialer", "Expected a yamux context, but got a context of type %d.\n", peer->sessionContext->default_stream->stream_type);
@@ -305,6 +352,9 @@ int libp2p_conn_dialer_join_swarm(const struct Dialer* dialer, struct Libp2pPeer
 					libp2p_peerstore_add_peer(dialer->peerstore, peer);
 				}
 			}
+			// Hand the peer off to the swarm now that Identify is complete.
+			// Doing this earlier lets the swarm thread race with dialer reads.
+			libp2p_swarm_add_peer(dialer->swarm, peer);
 			DEBUG_PRINTF("[dialer debug] join_swarm returning success\n");
 			return 1;
 		} else {

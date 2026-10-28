@@ -1,6 +1,8 @@
 DEPS = 
 OBJS = dialer.o transport_dialer.o connection.o tcp_transport_dialer.o session.o
 
+CFLAGS += -I../v2/include
+
 %.o: %.c $(DEPS)
 	$(CC) -c -o $@ $< $(CFLAGS)
 
