@@ -262,6 +262,9 @@ int libp2p_conn_dialer_join_swarm(const struct Dialer* dialer, struct Libp2pPeer
 				return 0;
 			}
 			DEBUG_PRINTF("[dialer debug] yamux ready, default_stream type=%d\n", peer->sessionContext->default_stream->stream_type);
+			// Now that the Noise-secured multistream and yamux are ready, hand the
+			// peer off to the swarm. The swarm thread will drive yamux frame I/O.
+			libp2p_swarm_add_peer(dialer->swarm, peer);
 			// the rest should be done on another thread
 			// we have our swarm connection. Now we ask for some "channels"
 			// id over multistream over yamux
@@ -352,9 +355,6 @@ int libp2p_conn_dialer_join_swarm(const struct Dialer* dialer, struct Libp2pPeer
 					libp2p_peerstore_add_peer(dialer->peerstore, peer);
 				}
 			}
-			// Hand the peer off to the swarm now that Identify is complete.
-			// Doing this earlier lets the swarm thread race with dialer reads.
-			libp2p_swarm_add_peer(dialer->swarm, peer);
 			DEBUG_PRINTF("[dialer debug] join_swarm returning success\n");
 			return 1;
 		} else {
