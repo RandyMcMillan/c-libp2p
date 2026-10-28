@@ -295,6 +295,15 @@ int libp2p_net_multistream_read(void* stream_context, struct StreamMessage** res
 	int bytes_read = parent_stream->read_raw(parent_stream->stream_context, rslts->data, rslts->data_size, timeout_secs);
 	if (bytes_read != num_bytes_requested) {
 		libp2p_logger_error("multistream", "read: Was supposed to read %d bytes, but read_raw returned %d.\n", num_bytes_requested, bytes_read);
+		libp2p_logger_error("multistream", "read: parent stream type=%d context=%p varint_length=%zu\n", parent_stream->stream_type, (void*)parent_stream->stream_context, varint_length);
+		char hex[65];
+		hex[0] = '\0';
+		for (size_t i = 0; i < varint_length && i < 12; i++) {
+			char tmp[4];
+			snprintf(tmp, sizeof(tmp), "%02x", varint[i]);
+			strncat(hex, tmp, sizeof(hex) - strlen(hex) - 1);
+		}
+		libp2p_logger_error("multistream", "read: varint bytes: %s\n", hex);
 		// problem reading from the parent stream
 		libp2p_stream_message_free(*results);
 		*results = NULL;
