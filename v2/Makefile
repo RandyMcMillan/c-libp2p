@@ -22,6 +22,7 @@ SRCS = src/net/multiaddr.c \
        src/conn/noise_callbacks.c \
        src/conn/yamux.c \
        src/conn/connection.c \
+       src/crypto/verify.c \
        src/identify/identify_v2.c \
        src/identify/identify_v2_ipfs.c \
        src/swarm/swarm.c \

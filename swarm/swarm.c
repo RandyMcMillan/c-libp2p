@@ -85,8 +85,6 @@ void libp2p_swarm_listen(void* ctx) {
 	} // end of loop
 
 	// clean up memory
-	if (session_context->host != NULL)
-		free(session_context->host);
 	free(swarm_session);
 }
 

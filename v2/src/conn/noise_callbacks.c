@@ -6,7 +6,7 @@
 #include "libp2p/crypto/rsa.h"
 #include "libp2p/crypto/key.h"
 #include "libp2p/utils/logger.h"
-#include "ipfs/crypto/verify.h"
+#include "libp2p/crypto/verify.h"
 
 #define NOISE_SIG_PREFIX "noise-libp2p-static-key:"
 #define NOISE_SIG_PREFIX_LEN 24
@@ -87,9 +87,9 @@ static int noise_cb_verify(const uint8_t *identity_key, size_t identity_key_len,
         };
         ret = libp2p_crypto_rsa_verify(&rsa_pub, to_verify, NOISE_SIG_PREFIX_LEN + data_len, sig);
     } else if (pub_key->type == KEYTYPE_ED25519) {
-        ret = ipfs_crypto_verify_ed25519(pub_key->data, pub_key->data_size,
-                                         to_verify, NOISE_SIG_PREFIX_LEN + data_len,
-                                         sig, sig_len);
+        ret = libp2p_crypto_verify_ed25519(pub_key->data, pub_key->data_size,
+                                           to_verify, NOISE_SIG_PREFIX_LEN + data_len,
+                                           sig, sig_len);
     }
 
     free(to_verify);

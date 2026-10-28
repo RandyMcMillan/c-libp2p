@@ -85,6 +85,10 @@ int libp2p_session_context_free(struct SessionContext* context) {
 			libp2p_crypto_ephemeral_key_free(context->ephemeral_private_key);
 			context->ephemeral_private_key = NULL;
 		}
+		if (context->host != NULL) {
+			free(context->host);
+			context->host = NULL;
+		}
 		free(context);
 	}
 	return 1;
