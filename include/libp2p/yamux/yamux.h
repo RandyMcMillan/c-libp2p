@@ -70,7 +70,7 @@ struct YamuxChannelContext {
 /**
  * Build a handler that can handle the yamux protocol
  */
-struct Libp2pProtocolHandler* libp2p_yamux_build_protocol_handler();
+struct Libp2pProtocolHandler* libp2p_yamux_build_protocol_handler(struct Libp2pVector* handlers);
 /***
  * Send the yamux protocol out the default stream
  * NOTE: if we initiate the connection, we should expect the same back
