@@ -62,6 +62,8 @@ struct SessionContext {
 	struct StretchedKey* remote_stretched_key;
 	unsigned char* remote_ephemeral_public_key;
 	size_t remote_ephemeral_public_key_size;
+	// protocol-specific streams opened during handshake
+	struct Stream* bitswap_stream;
 };
 
 /***

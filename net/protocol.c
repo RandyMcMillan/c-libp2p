@@ -1,6 +1,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "libp2p/utils/logger.h"
+#include "libp2p/net/multistream.h"
 #include "libp2p/net/protocol.h"
 
 /*
@@ -85,6 +86,14 @@ int libp2p_protocol_marshal(struct StreamMessage* msg, struct Stream* stream, st
 	const struct Libp2pProtocolHandler* handler = protocol_compare(msg, handlers);
 
 	if (handler == NULL) {
+		// If this stream was already upgraded to a specific protocol, route the
+		// message to the negotiated handler instead of dropping it.
+		if (stream != NULL && stream->stream_type == STREAM_TYPE_MULTISTREAM) {
+			struct MultistreamContext* ctx = (struct MultistreamContext*)stream->stream_context;
+			if (ctx != NULL && ctx->negotiated_handler != NULL) {
+				return ctx->negotiated_handler->HandleMessage(msg, stream, ctx->negotiated_handler->context);
+			}
+		}
 		if (appears_to_be_a_protocol(msg)) {
 			// Don't echo na back to na
 			if (msg->data_size != 3 || strncmp((char*)msg->data, "na\n", 3) != 0) {

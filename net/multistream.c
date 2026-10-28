@@ -468,6 +468,7 @@ struct Stream* libp2p_net_multistream_stream_new(struct Stream* parent_stream, i
 		ctx->stream = out;
 		ctx->handlers = NULL;
 		ctx->session_context = NULL;
+		ctx->negotiated_handler = NULL;
 		parent_stream->handle_upgrade(parent_stream, out);
 		// attempt to negotiate multistream protocol
 		if (!libp2p_net_multistream_negotiate(ctx, theyRequested)) {

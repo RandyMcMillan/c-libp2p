@@ -1,5 +1,6 @@
 #pragma once
 
+#include "libp2p/net/protocol.h"
 #include "libp2p/net/stream.h"
 #include "libp2p/conn/session.h"
 
@@ -25,6 +26,7 @@ struct MultistreamContext {
 	struct SessionContext* session_context;
 	struct Stream* stream;
 	volatile enum MultistreamStatus status;
+	const struct Libp2pProtocolHandler* negotiated_handler;
 };
 
 /***
