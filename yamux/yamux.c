@@ -62,6 +62,11 @@ struct YamuxContext* libp2p_yamux_get_context(void* stream_context) {
 	return ctx;
 }
 
+void libp2p_yamux_set_listener_attached(struct YamuxContext* ctx, int attached) {
+	if (ctx != NULL)
+		ctx->listener_attached = attached;
+}
+
 
 /**
  * Determines if this protocol can handle the incoming message
@@ -115,6 +120,9 @@ int yamux_handle_message(const struct StreamMessage* msg, struct Stream* stream,
 	if (new_stream != NULL) {
 		struct YamuxContext* ctx = (struct YamuxContext*) new_stream->stream_context;
 		ctx->state = yamux_stream_est;
+		// The swarm listener is already running on this connection, so it
+		// will drive yamux frame I/O; channel reads must not pump frames.
+		ctx->listener_attached = 1;
 		// upgrade
 		return stream->handle_upgrade(stream, new_stream);
 	}
@@ -311,7 +319,7 @@ int libp2p_yamux_read(void* stream_context, struct StreamMessage** message, int 
 	// this is the normal situation (not dead code).
 	struct StreamMessage* incoming = NULL;
 	// we need a lock
-	if (parent_stream->read(parent_stream->stream_context, &incoming, yamux_default_timeout)) {
+	if (parent_stream->read(parent_stream->stream_context, &incoming, timeout_secs)) {
 		libp2p_logger_debug("yamux", "read: successfully read %d bytes from network.\n", incoming->data_size);
 		// This could be a data frame with the actual data coming later. Yuck.
 		// JMJ in the case of an incomplete buffer, the next read should be the data. This must
@@ -499,7 +507,19 @@ int libp2p_yamux_channel_read_raw(void* stream_context, uint8_t* buffer, int buf
 	// wait to see if we get the bytes we need
 	int counter = 0;
 	while (channelContext->buffer->buffer_size < buffer_size && counter < timeout_secs) {
-		sleep(1);
+		// If no swarm listener is driving this yamux session yet, pump frames
+		// ourselves so that multi-frame multistream messages are reassembled.
+		if (!channelContext->yamux_context->listener_attached) {
+			struct StreamMessage* msg = NULL;
+			if (libp2p_yamux_read(channelContext->yamux_context, &msg, 1)) {
+				if (msg != NULL)
+					libp2p_stream_message_free(msg);
+				// Keep pumping without sleeping if we made progress on this channel.
+				if (channelContext->buffer->buffer_size > 0)
+					continue;
+			}
+		}
+		usleep(100000);
 		counter++;
 	}
 	return threadsafe_buffer_read(channelContext->buffer, buffer, buffer_size);
@@ -544,9 +564,6 @@ int libp2p_yamux_read_raw(void* stream_context, uint8_t* buffer, int buffer_size
 		libp2p_stream_message_free(ctx->buffered_message);
 		ctx->buffered_message = NULL;
 		ctx->buffered_message_pos = -1;
-	} else {
-		// we didn't read everything.
-		ctx->buffered_message_pos = max_to_read;
 	}
 	return max_to_read;
 }
@@ -568,6 +585,7 @@ struct YamuxContext* libp2p_yamux_context_new(struct Stream* stream, int amServe
 		ctx->buffered_message = NULL;
 		ctx->buffered_message_pos = -1;
 		ctx->protocol_handlers = NULL;
+		ctx->listener_attached = 0;
 	}
 	return ctx;
 }
