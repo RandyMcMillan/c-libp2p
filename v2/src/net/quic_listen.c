@@ -300,10 +300,12 @@ static void quic_listen_stream_close(struct Libp2pV2Stream *stream)
         return;
     struct quic_listen_stream_ctx *sc = (struct quic_listen_stream_ctx *)stream->stream_context;
     if (sc) {
+        /* Close the lsquic stream but do not drive the engine here.
+         * quic_listen_stream_read/write already process the engine after I/O,
+         * and calling lsquic_engine_process_conns immediately after
+         * lsquic_stream_close caused a daemon segfault in the c-ipfs QUIC path. */
         if (sc->ls_stream)
             lsquic_stream_close(sc->ls_stream);
-        if (sc->listener && sc->listener->engine)
-            lsquic_engine_process_conns(sc->listener->engine);
         if (sc->conn) {
             sc->conn->stream_ready = 0;
             quic_listen_conn_release(sc->conn);
