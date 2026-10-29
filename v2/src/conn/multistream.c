@@ -5,6 +5,7 @@
 
 #include "libp2p/conn/multistream.h"
 #include "libp2p/utils/logger.h"
+#include "libp2p/utils/debug.h"
 
 #define MULTISTREAM_MSG_HEADER "/multistream/1.0.0\n"
 
@@ -26,10 +27,21 @@ static int write_length_prefixed_msg(struct Libp2pV2Stream* stream, const char* 
         header_len++;
     } while (temp > 0);
 
-    if (stream->write(stream, header, header_len) <= 0)
+    /* Send the length prefix and the protocol string in one write so the
+     * underlying framing transport (e.g. Noise over WebSocket) carries the
+     * complete multistream message in a single record. */
+    size_t total_len = header_len + msg_len;
+    unsigned char *combined = (unsigned char*)malloc(total_len);
+    if (combined == NULL)
         return 0;
+    memcpy(combined, header, header_len);
+    memcpy(combined + header_len, msg, msg_len);
 
-    if (stream->write(stream, (const unsigned char*)msg, msg_len) <= 0)
+    libp2p_v2_logger_info("multistream", "writing length-prefixed message %zu bytes: %s", total_len, msg);
+    ssize_t n = stream->write(stream, combined, total_len);
+    free(combined);
+    libp2p_v2_logger_info("multistream", "wrote message %zd/%zu bytes\n", n, total_len);
+    if (n <= 0 || (size_t)n != total_len)
         return 0;
 
     return 1;
@@ -44,11 +56,15 @@ static int read_length_prefixed_msg(struct Libp2pV2Stream* stream, char* buffer,
     unsigned char byte = 0;
 
     do {
-        if (stream->read(stream, &byte, 1) <= 0)
+        ssize_t r = stream->read(stream, &byte, 1);
+        libp2p_v2_logger_info("multistream", "read varint byte r=%zd byte=0x%02x\n", r, byte);
+        if (r <= 0)
             return 0;
         msg_len |= (size_t)(byte & 0x7F) << shift;
         shift += 7;
     } while (byte & 0x80);
+
+    libp2p_v2_logger_info("multistream", "read_length_prefixed_msg msg_len=%zu\n", msg_len);
 
     if (msg_len >= max_len) {
         libp2p_v2_logger_error("multistream", "Protocol string exceeds buffer size\n");
@@ -58,11 +74,13 @@ static int read_length_prefixed_msg(struct Libp2pV2Stream* stream, char* buffer,
     size_t total_read = 0;
     while (total_read < msg_len) {
         ssize_t ret = stream->read(stream, (unsigned char*)buffer + total_read, msg_len - total_read);
+        libp2p_v2_logger_info("multistream", "read body ret=%zd total=%zu/%zu\n", ret, total_read, msg_len);
         if (ret <= 0)
             return 0;
         total_read += (size_t)ret;
     }
     buffer[msg_len] = '\0';
+    libp2p_v2_logger_info("multistream", "read_length_prefixed_msg complete: %s", buffer);
     return 1;
 }
 
@@ -77,13 +95,19 @@ int libp2p_net_multistream_write_protocol(struct Libp2pV2Stream* stream, const c
 }
 
 int libp2p_v2_net_multistream_connect(struct Libp2pV2Stream* stream) {
-    if (stream == NULL)
+    DBG_SCOPE("multistream", "libp2p_v2_net_multistream_connect ENTER stream=%p\n", (void*)stream);
+    if (stream == NULL) {
+        libp2p_v2_logger_error("multistream", "connect: stream is NULL\n");
         return 0;
+    }
 
+    DBG_SCOPE("multistream", "libp2p_v2_net_multistream_connect: about to write header\n");
     if (!write_length_prefixed_msg(stream, MULTISTREAM_MSG_HEADER)) {
         libp2p_v2_logger_error("multistream", "Failed to send multistream header\n");
         return 0;
     }
+
+    DBG_SCOPE("multistream", "libp2p_v2_net_multistream_connect: header written, about to read response\n");
 
     char response[256];
     if (!read_length_prefixed_msg(stream, response, sizeof(response))) {
@@ -91,28 +115,43 @@ int libp2p_v2_net_multistream_connect(struct Libp2pV2Stream* stream) {
         return 0;
     }
 
-    if (strcmp(response, MULTISTREAM_MSG_HEADER) != 0) {
-        libp2p_v2_logger_error("multistream", "Peer rejected multistream version\n");
+    DBG_SCOPE("multistream", "multistream_connect response read OK, response_len=%zu response[18]=0x%02x response[19]=0x%02x\n",
+              strlen(response), (unsigned char)response[18], (unsigned char)response[19]);
+
+    int cmp = strcmp(response, MULTISTREAM_MSG_HEADER);
+    DBG_SCOPE("multistream", "multistream_connect strcmp=%d\n", cmp);
+
+    if (cmp != 0) {
+        libp2p_v2_logger_error("multistream", "Peer rejected multistream version: got '%s' expected '%s'\n", response, MULTISTREAM_MSG_HEADER);
         return 0;
     }
 
+    libp2p_v2_logger_info("multistream", "connect succeeded, returning 1\n");
     return 1;
 }
 
 int libp2p_net_multistream_negotiate_protocol(struct Libp2pV2Stream* stream, const char* protocol_id) {
+    DBG_SCOPE("multistream", "negotiate_protocol ENTER stream=%p protocol=%s\n", (void*)stream, protocol_id ? protocol_id : "(null)");
     if (stream == NULL || protocol_id == NULL)
         return 0;
 
     char formatted_proto[256];
     snprintf(formatted_proto, sizeof(formatted_proto), "%s\n", protocol_id);
 
-    if (!write_length_prefixed_msg(stream, formatted_proto))
+    libp2p_v2_logger_info("multistream", "negotiate_protocol: about to propose %s", formatted_proto);
+    if (!write_length_prefixed_msg(stream, formatted_proto)) {
+        libp2p_v2_logger_error("multistream", "negotiate_protocol: failed to write %s\n", formatted_proto);
         return 0;
+    }
+    libp2p_v2_logger_info("multistream", "negotiate_protocol: wrote %s, waiting for response\n", formatted_proto);
 
     char response[256];
-    if (!read_length_prefixed_msg(stream, response, sizeof(response)))
+    if (!read_length_prefixed_msg(stream, response, sizeof(response))) {
+        libp2p_v2_logger_error("multistream", "negotiate_protocol: failed to read response for %s\n", formatted_proto);
         return 0;
+    }
 
+    libp2p_v2_logger_info("multistream", "proposed %s got response %s\n", formatted_proto, response);
     return (strcmp(response, formatted_proto) == 0);
 }
 

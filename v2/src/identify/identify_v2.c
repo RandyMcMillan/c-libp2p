@@ -7,6 +7,7 @@
 #include "libp2p/crypto/peerutils.h"
 #include "libp2p/utils/logger.h"
 #include "protobuf.h"
+#include "varint.h"
 
 IdentifyInfo* libp2p_identify_info_new(void) {
     IdentifyInfo* info = (IdentifyInfo*)calloc(1, sizeof(IdentifyInfo));
@@ -38,6 +39,55 @@ static int add_string_to_array(char*** array, size_t* count, char* item) {
     new_arr[*count] = item;
     *array = new_arr;
     (*count)++;
+    return 1;
+}
+
+static int identify_read_full(struct Libp2pV2Stream* stream, unsigned char* buf, size_t len)
+{
+    size_t total = 0;
+    while (total < len) {
+        ssize_t ret = stream->read(stream, buf + total, len - total);
+        if (ret <= 0)
+            return 0;
+        total += (size_t)ret;
+    }
+    return 1;
+}
+
+static int identify_read_varint_length(struct Libp2pV2Stream* stream, size_t* out_len)
+{
+    unsigned char prefix[16];
+    size_t pos = 0;
+
+    for (;;) {
+        if (pos >= sizeof(prefix))
+            return 0;
+        ssize_t ret = stream->read(stream, &prefix[pos], 1);
+        if (ret <= 0)
+            return 0;
+        if ((prefix[pos] & 0x80) == 0)
+            break;
+        pos++;
+    }
+    pos++;
+
+    size_t bytes = 0;
+    unsigned long long val = varint_decode(prefix, (int)pos, &bytes);
+    if (bytes != pos || val > (size_t)-1)
+        return 0;
+    *out_len = (size_t)val;
+    return 1;
+}
+
+static int identify_write_all(struct Libp2pV2Stream* stream, const unsigned char* buf, size_t len)
+{
+    size_t total = 0;
+    while (total < len) {
+        ssize_t ret = stream->write(stream, buf + total, len - total);
+        if (ret <= 0)
+            return 0;
+        total += (size_t)ret;
+    }
     return 1;
 }
 
@@ -80,8 +130,12 @@ int libp2p_identify_send_response(struct Libp2pV2Stream* stream, struct Libp2pV2
         }
     }
 
-    ssize_t ret = stream->write(stream, buf, written);
-    if (ret != (ssize_t)written) {
+    /* go-libp2p sends Identify as a length-delimited (msgio) protobuf. */
+    unsigned char len_buf[16];
+    size_t len_bytes = 0;
+    varint_encode((unsigned long long)written, len_buf, sizeof(len_buf), &len_bytes);
+    if (!identify_write_all(stream, len_buf, len_bytes) ||
+        !identify_write_all(stream, buf, written)) {
         libp2p_v2_logger_error("identify", "Failed to write Identify response\n");
         return 0;
     }
@@ -92,34 +146,42 @@ int libp2p_identify_send_response(struct Libp2pV2Stream* stream, struct Libp2pV2
 int libp2p_identify_receive(struct Libp2pV2Stream* stream, struct Libp2pPeer* peer) {
     if (!stream || !peer) return 0;
 
-    unsigned char buf[4096];
-    ssize_t total = 0;
-    ssize_t ret;
-
-    /* Read up to sizeof(buf) or until stream returns 0/-1 */
-    while (total < (ssize_t)sizeof(buf)) {
-        ret = stream->read(stream, buf + total, sizeof(buf) - total);
-        if (ret <= 0) break;
-        total += ret;
+    /* go-libp2p sends Identify as a length-delimited (msgio) protobuf. */
+    size_t msg_len = 0;
+    if (!identify_read_varint_length(stream, &msg_len) || msg_len == 0) {
+        libp2p_v2_logger_error("identify", "Failed to read Identify message length\n");
+        return 0;
     }
 
-    if (total == 0) {
-        libp2p_v2_logger_error("identify", "No data received on identify stream\n");
+    unsigned char stack_buf[4096];
+    unsigned char* buf = stack_buf;
+    if (msg_len > sizeof(stack_buf)) {
+        buf = (unsigned char*)malloc(msg_len);
+        if (!buf) return 0;
+    }
+
+    int ok = identify_read_full(stream, buf, msg_len);
+    if (!ok) {
+        libp2p_v2_logger_error("identify", "Failed to read Identify message body\n");
+        if (buf != stack_buf) free(buf);
         return 0;
     }
 
     IdentifyInfo* info = libp2p_identify_info_new();
-    if (!info) return 0;
+    if (!info) {
+        if (buf != stack_buf) free(buf);
+        return 0;
+    }
 
     size_t pos = 0;
     int success = 1;
 
-    while ((size_t)pos < (size_t)total) {
+    while (pos < msg_len) {
         int field_no;
         enum WireType field_type;
         size_t field_bytes = 0;
 
-        if (!protobuf_decode_field_and_type(buf + pos, (int)(total - pos), &field_no, &field_type, &field_bytes)) {
+        if (!protobuf_decode_field_and_type(buf + pos, (int)(msg_len - pos), &field_no, &field_type, &field_bytes)) {
             success = 0;
             break;
         }
@@ -130,7 +192,7 @@ int libp2p_identify_receive(struct Libp2pV2Stream* stream, struct Libp2pPeer* pe
 
         switch (field_no) {
             case 1: /* publicKey */
-                if (!protobuf_decode_string(buf + pos, total - pos, &str_val, &str_len)) {
+                if (!protobuf_decode_string(buf + pos, msg_len - pos, &str_val, &str_len)) {
                     success = 0;
                 } else {
                     info->public_key = str_val;
@@ -140,7 +202,7 @@ int libp2p_identify_receive(struct Libp2pV2Stream* stream, struct Libp2pPeer* pe
                 break;
 
             case 2: /* listenAddrs */
-                if (!protobuf_decode_string(buf + pos, total - pos, &str_val, &str_len)) {
+                if (!protobuf_decode_string(buf + pos, msg_len - pos, &str_val, &str_len)) {
                     success = 0;
                 } else {
                     add_string_to_array(&info->listen_addrs, &info->listen_addrs_count, str_val);
@@ -149,7 +211,7 @@ int libp2p_identify_receive(struct Libp2pV2Stream* stream, struct Libp2pPeer* pe
                 break;
 
             case 3: /* protocols */
-                if (!protobuf_decode_string(buf + pos, total - pos, &str_val, &str_len)) {
+                if (!protobuf_decode_string(buf + pos, msg_len - pos, &str_val, &str_len)) {
                     success = 0;
                 } else {
                     add_string_to_array(&info->protocols, &info->protocols_count, str_val);
@@ -158,7 +220,7 @@ int libp2p_identify_receive(struct Libp2pV2Stream* stream, struct Libp2pPeer* pe
                 break;
 
             case 4: /* observedAddr */
-                if (!protobuf_decode_string(buf + pos, total - pos, &str_val, &str_len)) {
+                if (!protobuf_decode_string(buf + pos, msg_len - pos, &str_val, &str_len)) {
                     success = 0;
                 } else {
                     info->observed_addr = str_val;
@@ -168,7 +230,7 @@ int libp2p_identify_receive(struct Libp2pV2Stream* stream, struct Libp2pPeer* pe
                 break;
 
             case 5: /* protocolVersion */
-                if (!protobuf_decode_string(buf + pos, total - pos, &str_val, &str_len)) {
+                if (!protobuf_decode_string(buf + pos, msg_len - pos, &str_val, &str_len)) {
                     success = 0;
                 } else {
                     info->protocol_version = str_val;
@@ -177,7 +239,7 @@ int libp2p_identify_receive(struct Libp2pV2Stream* stream, struct Libp2pPeer* pe
                 break;
 
             case 6: /* agentVersion */
-                if (!protobuf_decode_string(buf + pos, total - pos, &str_val, &str_len)) {
+                if (!protobuf_decode_string(buf + pos, msg_len - pos, &str_val, &str_len)) {
                     success = 0;
                 } else {
                     info->agent_version = str_val;
@@ -190,7 +252,7 @@ int libp2p_identify_receive(struct Libp2pV2Stream* stream, struct Libp2pPeer* pe
                 if (field_type == WIRETYPE_LENGTH_DELIMITED) {
                     size_t skip_len = 0;
                     char* skip = NULL;
-                    protobuf_decode_string(buf + pos, total - pos, &skip, &skip_len);
+                    protobuf_decode_string(buf + pos, msg_len - pos, &skip, &skip_len);
                     if (skip) free(skip);
                     pos += skip_len;
                 }
@@ -234,6 +296,7 @@ int libp2p_identify_receive(struct Libp2pV2Stream* stream, struct Libp2pPeer* pe
         }
     }
 
+    if (buf != stack_buf) free(buf);
     libp2p_identify_info_free(info);
     return success;
 }

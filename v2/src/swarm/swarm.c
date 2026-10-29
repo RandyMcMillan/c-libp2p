@@ -9,6 +9,7 @@
 #include "libp2p/identify/identify_v2.h"
 #include "libp2p/net/multiaddr.h"
 #include "libp2p/net/tcp.h"
+#include "libp2p/net/ws.h"
 #include "libp2p/utils/logger.h"
 
 struct Swarm* libp2p_v2_swarm_new(struct Libp2pV2Peerstore* peerstore, void* private_key) {
@@ -39,17 +40,22 @@ int libp2p_v2_swarm_connect(struct Swarm* swarm, const char* multiaddr_str) {
         return 0;
     }
 
-    struct Libp2pV2Stream* tcp_stream = libp2p_net_tcp_dial(ma->ip, ma->port);
-    if (tcp_stream == NULL) {
-        libp2p_v2_logger_error("swarm", "Failed to establish TCP connection via swarm\n");
+    struct Libp2pV2Stream* transport_stream = NULL;
+    if (strstr(multiaddr_str, "/ws") != NULL) {
+        transport_stream = libp2p_net_ws_dial(ma->ip, ma->port);
+    } else {
+        transport_stream = libp2p_net_tcp_dial(ma->ip, ma->port);
+    }
+    if (transport_stream == NULL) {
+        libp2p_v2_logger_error("swarm", "Failed to establish transport connection via swarm\n");
         libp2p_multiaddr_free(ma);
         return 0;
     }
 
     libp2p_v2_logger_info("swarm", "Successfully established physical transport connection\n");
 
-    if (!libp2p_v2_net_multistream_connect(tcp_stream)) {
-        tcp_stream->close(tcp_stream);
+    if (!libp2p_v2_net_multistream_connect(transport_stream)) {
+        transport_stream->close(transport_stream);
         libp2p_multiaddr_free(ma);
         return 0;
     }
@@ -59,9 +65,9 @@ int libp2p_v2_swarm_connect(struct Swarm* swarm, const char* multiaddr_str) {
 
     noise_identity_callbacks_t noise_cbs;
     libp2p_noise_identity_callbacks_init(&noise_cbs);
-    struct Libp2pV2Stream* noise_stream = libp2p_noise_handshake(tcp_stream, swarm->private_key, &target_peer, &noise_cbs);
+    struct Libp2pV2Stream* noise_stream = libp2p_noise_handshake(transport_stream, swarm->private_key, &target_peer, &noise_cbs);
     if (noise_stream == NULL) {
-        tcp_stream->close(tcp_stream);
+        transport_stream->close(transport_stream);
         libp2p_multiaddr_free(ma);
         return 0;
     }

@@ -14,8 +14,16 @@ LDFLAGS += -lssl -lcrypto
 endif
 endif
 
+LWS_LIB = ../../libwebsockets/build-c-ipfs/lib/libwebsockets.a
+ifneq ($(wildcard $(LWS_LIB)),)
+HAS_LIBWEBSOCKETS = 1
+CFLAGS += -DHAS_LIBWEBSOCKETS -I ../../libwebsockets/build-c-ipfs/include -I ../../libwebsockets/include
+LDFLAGS += $(LWS_LIB)
+endif
+
 SRCS = src/net/multiaddr.c \
        src/net/tcp_dial.c \
+       src/net/ws_dial.c \
        src/peer/peerstore.c \
        src/conn/multistream.c \
        src/conn/noise.c \

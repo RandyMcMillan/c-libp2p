@@ -42,6 +42,11 @@ struct NoiseStreamContext {
     uint64_t read_nonce;
     uint64_t write_nonce;
     pthread_mutex_t rw_mutex;
+
+    /* Decrypted read buffer so callers can consume partial Noise payloads. */
+    unsigned char read_buf[65536];
+    size_t read_len;
+    size_t read_pos;
 };
 
 static void noise_hexdump(const char* label, const unsigned char* data, size_t len) {
@@ -198,6 +203,21 @@ static ssize_t noise_stream_read(struct Libp2pV2Stream* stream, unsigned char* b
 
     pthread_mutex_lock(&ctx->rw_mutex);
 
+    /* Serve any decrypted plaintext buffered from a previous Noise frame. */
+    if (ctx->read_pos < ctx->read_len) {
+        size_t avail = ctx->read_len - ctx->read_pos;
+        size_t to_copy = count < avail ? count : avail;
+        memcpy(buf, ctx->read_buf + ctx->read_pos, to_copy);
+        ctx->read_pos += to_copy;
+        if (ctx->read_pos == ctx->read_len) {
+            ctx->read_pos = 0;
+            ctx->read_len = 0;
+        }
+        libp2p_v2_logger_info("noise", "served %zu buffered plaintext bytes (count=%zu)\n", to_copy, count);
+        pthread_mutex_unlock(&ctx->rw_mutex);
+        return (ssize_t)to_copy;
+    }
+
     unsigned char frame_header[2];
     ssize_t ret = ctx->raw_stream->read(ctx->raw_stream, frame_header, 2);
     if (ret != 2) {
@@ -229,13 +249,13 @@ static ssize_t noise_stream_read(struct Libp2pV2Stream* stream, unsigned char* b
     }
 
     size_t plaintext_len = frame_len - NOISE_TAGLEN;
-    if (plaintext_len > count) {
+    if (plaintext_len > sizeof(ctx->read_buf)) {
         free(cipher_buf);
         pthread_mutex_unlock(&ctx->rw_mutex);
         return -1;
     }
 
-    if (!noise_decrypt(ctx->read_key, ctx->read_nonce, NULL, 0, cipher_buf, frame_len, buf)) {
+    if (!noise_decrypt(ctx->read_key, ctx->read_nonce, NULL, 0, cipher_buf, frame_len, ctx->read_buf)) {
         free(cipher_buf);
         pthread_mutex_unlock(&ctx->rw_mutex);
         return -1;
@@ -243,8 +263,20 @@ static ssize_t noise_stream_read(struct Libp2pV2Stream* stream, unsigned char* b
 
     ctx->read_nonce++;
     free(cipher_buf);
+
+    libp2p_v2_logger_info("noise", "read new frame plaintext_len=%zu (count=%zu)\n", plaintext_len, count);
+
+    size_t to_copy = count < plaintext_len ? count : plaintext_len;
+    memcpy(buf, ctx->read_buf, to_copy);
+    ctx->read_pos = to_copy;
+    ctx->read_len = plaintext_len;
+    if (ctx->read_pos == ctx->read_len) {
+        ctx->read_pos = 0;
+        ctx->read_len = 0;
+    }
+
     pthread_mutex_unlock(&ctx->rw_mutex);
-    return (ssize_t)plaintext_len;
+    return (ssize_t)to_copy;
 }
 
 static ssize_t noise_stream_write(struct Libp2pV2Stream* stream, const unsigned char* buf, size_t count) {

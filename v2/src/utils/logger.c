@@ -13,6 +13,7 @@ static void log_message(const char* level, const char* subsystem, const char* fo
     printf("[%s] [%s] [%s]: ", timestamp, level, subsystem);
     vprintf(format, args);
     printf("\n");
+    fflush(stdout);
 }
 
 void libp2p_v2_logger_info(const char* subsystem, const char* format, ...) {
