@@ -363,11 +363,11 @@ int libp2p_tls_verify_peer_cert(X509 *cert,
         goto cleanup;
     }
 
-    if (X509_cmp_current_time(X509_get_notBefore(cert)) < 0) {
+    if (X509_cmp_current_time(X509_get_notBefore(cert)) > 0) {
         tls_dbg("certificate not yet valid\n");
         goto cleanup;
     }
-    if (X509_cmp_current_time(X509_get_notAfter(cert)) > 0) {
+    if (X509_cmp_current_time(X509_get_notAfter(cert)) < 0) {
         tls_dbg("certificate expired\n");
         goto cleanup;
     }
