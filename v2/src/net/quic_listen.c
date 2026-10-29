@@ -195,7 +195,10 @@ static lsquic_stream_ctx_t *quic_listen_on_new_stream(void *stream_if_ctx, lsqui
     lc->stream = s;
     lc->stream_ready = 1;
     lc->expecting_outbound = 0;
+    /* Inbound streams are bidirectional: we read the peer's request and
+     * write our response. */
     lsquic_stream_wantread(s, 1);
+    lsquic_stream_wantwrite(s, 1);
     quic_dbg("new QUIC stream ready (outbound=%d)\n", lc->expecting_outbound);
 
     return (lsquic_stream_ctx_t *)lc;
@@ -244,6 +247,7 @@ static ssize_t quic_listen_stream_read(struct Libp2pV2Stream *stream, unsigned c
     struct Libp2pQuicListener *listener = sc->listener;
     int waited = 0;
     while (waited < QUIC_LISTEN_READ_TIMEOUT_MS) {
+        lsquic_stream_wantread(sc->ls_stream, 1);
         lsquic_engine_process_conns(listener->engine);
         n = lsquic_stream_read(sc->ls_stream, buf, count);
         if (n > 0)

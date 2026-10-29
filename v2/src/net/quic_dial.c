@@ -196,7 +196,11 @@ static lsquic_stream_ctx_t *quic_on_new_stream(void *stream_if_ctx, lsquic_strea
     if (!dial->outbound_ready) {
         dial->outbound_stream = s;
         dial->outbound_ready = 1;
+        /* Outbound bidirectional streams carry both our writes and the peer's
+         * replies; lsquic needs wantread set before it will buffer incoming
+         * data for synchronous lsquic_stream_read calls. */
         lsquic_stream_wantwrite(s, 1);
+        lsquic_stream_wantread(s, 1);
         quic_dbg("outbound QUIC stream ready\n");
     } else {
         dial->inbound_stream = s;
@@ -254,10 +258,13 @@ static ssize_t quic_stream_read(struct Libp2pV2Stream *stream, unsigned char *bu
     if (n < 0)
         return -1;
 
-    /* No buffered data: drive the engine until data arrives or timeout. */
+    /* No buffered data: drive the engine until data arrives or timeout.
+     * Re-enable read interest before each poll so lsquic continues to
+     * deliver incoming data after the on_read callback disables it. */
     struct quic_dial_ctx *dial = sc->dial;
     int waited = 0;
     while (waited < QUIC_READ_TIMEOUT_MS) {
+        lsquic_stream_wantread(sc->ls_stream, 1);
         lsquic_engine_process_conns(dial->engine);
         n = lsquic_stream_read(sc->ls_stream, buf, count);
         if (n > 0)
