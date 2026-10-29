@@ -104,35 +104,18 @@ static int yamux_send_ping_response(struct YamuxSession* session, uint32_t value
     return yamux_send_header(session, YAMUX_TYPE_PING, YAMUX_FLAG_ACK, 0, value);
 }
 
-static int yamux_pending_add(struct YamuxSession* session, uint32_t stream_id)
+static struct YamuxPendingInbound* yamux_pending_add(struct YamuxSession* session, uint32_t stream_id)
 {
     struct YamuxPendingInbound* node = (struct YamuxPendingInbound*)malloc(sizeof(struct YamuxPendingInbound));
     if (!node)
-        return 0;
+        return NULL;
     node->stream_id = stream_id;
     node->data = NULL;
     node->data_len = 0;
     node->data_pos = 0;
     node->next = session->pending_inbound;
     session->pending_inbound = node;
-    return 1;
-}
-
-static int yamux_pending_remove(struct YamuxSession* session, uint32_t stream_id)
-{
-    struct YamuxPendingInbound** current = &session->pending_inbound;
-    while (*current) {
-        if ((*current)->stream_id == stream_id) {
-            struct YamuxPendingInbound* to_free = *current;
-            *current = (*current)->next;
-            if (to_free->data)
-                free(to_free->data);
-            free(to_free);
-            return 1;
-        }
-        current = &(*current)->next;
-    }
-    return 0;
+    return node;
 }
 
 static int yamux_pending_exists(struct YamuxSession* session, uint32_t stream_id)
@@ -382,8 +365,12 @@ static int yamux_wait_for_syn(struct YamuxSession* session, struct YamuxHeader* 
             continue;
         }
 
-        /* In yamux a new stream is opened with a WINDOW_UPDATE bearing SYN. */
-        if (syn_hdr->type == YAMUX_TYPE_WINDOW_UPDATE && (syn_hdr->flags & YAMUX_FLAG_SYN))
+        /* A new stream is opened with SYN, which may be carried on either a
+         * WINDOW_UPDATE or a DATA frame.  Leave DATA payloads in the stream so
+         * the caller can buffer them. */
+        if ((syn_hdr->type == YAMUX_TYPE_WINDOW_UPDATE ||
+             syn_hdr->type == YAMUX_TYPE_DATA) &&
+            (syn_hdr->flags & YAMUX_FLAG_SYN))
             return 1;
 
         /* Discard anything else. */
@@ -467,13 +454,27 @@ struct Libp2pV2Stream* libp2p_yamux_stream_open(struct YamuxSession* session) {
 
         /* Accept inbound SYNs for other streams: acknowledge them and queue
          * the stream id so libp2p_yamux_stream_accept can return it. */
-        if (hdr.type == YAMUX_TYPE_WINDOW_UPDATE && (hdr.flags & YAMUX_FLAG_SYN)) {
+        if ((hdr.type == YAMUX_TYPE_WINDOW_UPDATE ||
+             hdr.type == YAMUX_TYPE_DATA) &&
+            (hdr.flags & YAMUX_FLAG_SYN)) {
             if (!yamux_pending_exists(session, hdr.stream_id)) {
                 yamux_send_header(session, YAMUX_TYPE_WINDOW_UPDATE,
                                   YAMUX_FLAG_ACK, hdr.stream_id, 0);
-                yamux_pending_add(session, hdr.stream_id);
-                libp2p_v2_logger_info("yamux", "stream %u: queued inbound SYN for stream %u\n",
-                                      ctx->stream_id, hdr.stream_id);
+                struct YamuxPendingInbound* pending = yamux_pending_add(session, hdr.stream_id);
+                if (pending && hdr.type == YAMUX_TYPE_DATA && hdr.length > 0) {
+                    unsigned char* tmp = (unsigned char*)realloc(pending->data, hdr.length);
+                    if (tmp && yamux_read_full(session->underlying_stream, tmp, hdr.length)) {
+                        pending->data = tmp;
+                        pending->data_len = hdr.length;
+                        libp2p_v2_logger_info("yamux", "stream %u: buffered %u bytes for inbound DATA+SYN stream %u\n",
+                                              ctx->stream_id, hdr.length, hdr.stream_id);
+                    } else if (tmp) {
+                        pending->data = tmp;
+                    }
+                } else if (pending) {
+                    libp2p_v2_logger_info("yamux", "stream %u: queued inbound SYN for stream %u\n",
+                                          ctx->stream_id, hdr.stream_id);
+                }
             }
             continue;
         }
@@ -524,6 +525,19 @@ struct Libp2pV2Stream* libp2p_yamux_stream_accept(struct YamuxSession* session) 
     if (session == NULL || session->closed)
         return NULL;
 
+    struct YamuxStreamContext* ctx = (struct YamuxStreamContext*)malloc(sizeof(struct YamuxStreamContext));
+    if (ctx == NULL)
+        return NULL;
+
+    ctx->session = session;
+    ctx->send_window = YAMUX_INITIAL_WINDOW_SIZE;
+    ctx->recv_window = YAMUX_INITIAL_WINDOW_SIZE;
+    ctx->syn_ack_received = 1;
+    ctx->closed = 0;
+    ctx->read_buffer = NULL;
+    ctx->read_buffer_len = 0;
+    ctx->read_buffer_pos = 0;
+
     uint32_t stream_id = 0;
 
     /* If a remote SYN was already received while waiting for another stream's
@@ -535,32 +549,30 @@ struct Libp2pV2Stream* libp2p_yamux_stream_accept(struct YamuxSession* session) 
         libp2p_v2_logger_info("yamux", "accept returning queued inbound stream %u\n", stream_id);
     } else {
         struct YamuxHeader hdr;
-        if (!yamux_wait_for_syn(session, &hdr))
+        if (!yamux_wait_for_syn(session, &hdr)) {
+            free(ctx);
             return NULL;
+        }
 
         stream_id = hdr.stream_id;
-        uint32_t syn_payload = hdr.length;
 
-        /* Consume any payload that may accompany the SYN. */
-        if (syn_payload > 0) {
-            if (!yamux_discard_payload(session, syn_payload))
+        /* If the peer opened the stream with a DATA+SYN frame, buffer the
+         * payload so the caller can read it immediately after the ACK. */
+        if (hdr.type == YAMUX_TYPE_DATA && hdr.length > 0) {
+            ctx->read_buffer = (unsigned char*)malloc(hdr.length);
+            if (ctx->read_buffer == NULL ||
+                !yamux_read_full(session->underlying_stream, ctx->read_buffer, hdr.length)) {
+                free(ctx->read_buffer);
+                free(ctx);
                 return NULL;
+            }
+            ctx->read_buffer_len = hdr.length;
+            libp2p_v2_logger_info("yamux", "accept stream %u: buffered %u bytes from DATA+SYN\n",
+                                  stream_id, hdr.length);
         }
     }
 
-    struct YamuxStreamContext* ctx = (struct YamuxStreamContext*)malloc(sizeof(struct YamuxStreamContext));
-    if (ctx == NULL)
-        return NULL;
-
-    ctx->session = session;
     ctx->stream_id = stream_id;
-    ctx->send_window = YAMUX_INITIAL_WINDOW_SIZE;
-    ctx->recv_window = YAMUX_INITIAL_WINDOW_SIZE;
-    ctx->syn_ack_received = 1;
-    ctx->closed = 0;
-    ctx->read_buffer = NULL;
-    ctx->read_buffer_len = 0;
-    ctx->read_buffer_pos = 0;
 
     /* Transfer any buffered payload from the pending inbound entry, then
      * remove the pending entry. */
@@ -580,6 +592,8 @@ struct Libp2pV2Stream* libp2p_yamux_stream_accept(struct YamuxSession* session) 
 
     struct Libp2pV2Stream* stream = (struct Libp2pV2Stream*)calloc(1, sizeof(struct Libp2pV2Stream));
     if (stream == NULL) {
+        if (ctx->read_buffer)
+            free(ctx->read_buffer);
         free(ctx);
         return NULL;
     }
@@ -594,8 +608,7 @@ struct Libp2pV2Stream* libp2p_yamux_stream_accept(struct YamuxSession* session) 
      * is already 256 KiB. */
     if (!yamux_send_header(session, YAMUX_TYPE_WINDOW_UPDATE,
                            YAMUX_FLAG_ACK, ctx->stream_id, 0)) {
-        free(ctx);
-        free(stream);
+        stream->close(stream);
         return NULL;
     }
 
