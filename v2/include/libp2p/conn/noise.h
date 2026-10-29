@@ -49,6 +49,18 @@ typedef struct {
 
     /** Free a buffer allocated by get_identity_key or sign. */
     void (*free_buffer)(uint8_t *buf);
+
+    /**
+     * Optional: like sign, but signs data exactly as given, without the
+     * Noise domain-separation prefix. Used by the TLS/QUIC handshake, which
+     * supplies its own prefix. When NULL, sign is used.
+     */
+    int (*sign_raw)(void *private_key, const uint8_t *data, size_t data_len, uint8_t **out_sig, size_t *out_len);
+
+    /** Optional: like verify, but without the Noise prefix. When NULL, verify is used. */
+    int (*verify_raw)(const uint8_t *identity_key, size_t identity_key_len,
+                      const uint8_t *data, size_t data_len,
+                      const uint8_t *sig, size_t sig_len);
 } noise_identity_callbacks_t;
 
 struct Libp2pV2Stream* libp2p_noise_handshake(struct Libp2pV2Stream* raw_stream, void* private_key,

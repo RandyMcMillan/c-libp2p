@@ -184,7 +184,10 @@ static int tls_sign_cert_key(void *private_key,
     memcpy(to_sign, TLS_HANDSHAKE_PREFIX, TLS_HANDSHAKE_PREFIX_LEN);
     memcpy(to_sign + TLS_HANDSHAKE_PREFIX_LEN, spki_der, (size_t)spki_len);
 
-    if (!cbs->sign(private_key, (const uint8_t *)to_sign, to_sign_len, &sig, &sig_len))
+    /* The TLS prefix is already part of to_sign; avoid the Noise prefix. */
+    int (*sign_fn)(void *, const uint8_t *, size_t, uint8_t **, size_t *) =
+        cbs->sign_raw ? cbs->sign_raw : cbs->sign;
+    if (!sign_fn(private_key, (const uint8_t *)to_sign, to_sign_len, &sig, &sig_len))
         goto cleanup;
 
     *out_sig = sig;
@@ -473,9 +476,8 @@ int libp2p_tls_verify_peer_cert(X509 *cert,
     memcpy(to_verify + TLS_HANDSHAKE_PREFIX_LEN, spki_der, (size_t)spki_len);
     OPENSSL_free(spki_der);
 
-    if (!callbacks->verify(identity_key, identity_key_len,
-                           to_verify, to_verify_len,
-                           sig, sig_len)) {
+    if (!(callbacks->verify_raw ? callbacks->verify_raw : callbacks->verify)(
+            identity_key, identity_key_len, to_verify, to_verify_len, sig, sig_len)) {
         tls_dbg("libp2p extension signature invalid\n");
         free(to_verify);
         libp2p_crypto_public_key_free(pub_key);
