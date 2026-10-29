@@ -33,6 +33,49 @@ struct Libp2pV2Stream* libp2p_net_quic_dial(const char *ip_address, uint16_t por
  */
 struct Libp2pV2Stream* libp2p_net_quic_accept_stream(struct Libp2pV2Stream *outbound_stream);
 
+/**
+ * Opaque QUIC server listener.  Created by libp2p_net_quic_listener_new()
+ * and destroyed by libp2p_net_quic_listener_free().
+ */
+struct Libp2pQuicListener;
+
+/**
+ * Create a QUIC listener on the given IP address and UDP port.
+ *
+ * @param ip_address  Local IP address (IPv4 or IPv6).
+ * @param port        Local UDP port.
+ * @param private_key Node identity private key.
+ * @param callbacks   Identity callbacks for signing/verifying the TLS
+ *                    extension and deriving peer IDs.
+ * @return A listener handle, or NULL on error.
+ */
+struct Libp2pQuicListener* libp2p_net_quic_listener_new(const char *ip_address, uint16_t port,
+                                                        void *private_key,
+                                                        const noise_identity_callbacks_t *callbacks);
+
+/**
+ * Accept the next inbound QUIC stream from a remote peer.  This blocks until
+ * a stream is available or the internal timeout expires.
+ *
+ * @return A Libp2pV2Stream for the accepted stream, or NULL on timeout/error.
+ */
+struct Libp2pV2Stream* libp2p_net_quic_listener_accept(struct Libp2pQuicListener *listener);
+
+/**
+ * Destroy a QUIC listener and close all associated resources.
+ */
+void libp2p_net_quic_listener_free(struct Libp2pQuicListener *listener);
+
+/**
+ * Open a new outbound stream on the same QUIC connection as an accepted
+ * inbound stream.  Blocks until the stream is ready or the timeout expires.
+ *
+ * @param accepted_stream A stream previously returned by
+ *                        libp2p_net_quic_listener_accept().
+ * @return A new outbound Libp2pV2Stream, or NULL on error/timeout.
+ */
+struct Libp2pV2Stream* libp2p_net_quic_conn_open_stream(struct Libp2pV2Stream *accepted_stream);
+
 #ifdef __cplusplus
 }
 #endif

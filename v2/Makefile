@@ -39,7 +39,8 @@ SRCS = src/net/multiaddr.c \
 
 ifdef HAS_LSQUIC
 SRCS += src/conn/tls.c \
-        src/net/quic_dial.c
+        src/net/quic_dial.c \
+        src/net/quic_listen.c
 endif
 
 OBJS = $(SRCS:.c=.o)

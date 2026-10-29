@@ -37,6 +37,17 @@ struct Libp2pTlsIdentity {
     const noise_identity_callbacks_t *callbacks;
 };
 
+/* Forward declaration: the OpenSSL verify callback uses this. */
+static int libp2p_tls_openssl_verify_callback(int preverify_ok, X509_STORE_CTX *ctx);
+
+static int tls_identity_ex_data_index(void)
+{
+    static int idx = -1;
+    if (idx < 0)
+        idx = SSL_CTX_get_ex_new_index(0, NULL, NULL, NULL, NULL);
+    return idx;
+}
+
 static int tls_debug_scope_enabled(void)
 {
     return libp2p_v2_debug_scope_enabled("tls");
@@ -281,9 +292,14 @@ struct Libp2pTlsIdentity* libp2p_tls_identity_new(void *private_key,
 
     SSL_CTX_set_min_proto_version(identity->ssl_ctx, TLS1_3_VERSION);
     SSL_CTX_set_max_proto_version(identity->ssl_ctx, TLS1_3_VERSION);
+    /* Server mode relies on this OpenSSL verify callback because lsquic only
+     * installs its custom verify callback for client-side IETF QUIC sessions.
+     * The callback performs libp2p peer-certificate verification and returns
+     * success so that the handshake can complete for self-signed certs. */
+    SSL_CTX_set_ex_data(identity->ssl_ctx, tls_identity_ex_data_index(), identity);
     SSL_CTX_set_verify(identity->ssl_ctx,
                        SSL_VERIFY_PEER | SSL_VERIFY_FAIL_IF_NO_PEER_CERT,
-                       NULL);
+                       libp2p_tls_openssl_verify_callback);
 
     if (SSL_CTX_use_certificate(identity->ssl_ctx, identity->cert) != 1)
         goto err;
@@ -441,6 +457,43 @@ int libp2p_tls_verify_peer_cert(X509 *cert,
 cleanup:
     EVP_PKEY_free(pubkey);
     return ret;
+}
+
+/* OpenSSL/BoringSSL certificate verify callback.  Used in server mode (and
+ * harmless in client mode because lsquic installs its own custom verify
+ * callback for clients).  We accept only depth 0 and run the libp2p TLS
+ * extension check; any other depth is irrelevant because libp2p only sends a
+ * single end-entity certificate. */
+static int libp2p_tls_openssl_verify_callback(int preverify_ok, X509_STORE_CTX *ctx)
+{
+    (void)preverify_ok;
+    if (!ctx)
+        return 0;
+
+    SSL *ssl = X509_STORE_CTX_get_ex_data(ctx, SSL_get_ex_data_X509_STORE_CTX_idx());
+    if (!ssl)
+        return 0;
+    SSL_CTX *ssl_ctx = SSL_get_SSL_CTX(ssl);
+    if (!ssl_ctx)
+        return 0;
+    struct Libp2pTlsIdentity *identity = SSL_CTX_get_ex_data(ssl_ctx, tls_identity_ex_data_index());
+    if (!identity)
+        return 0;
+
+    int depth = X509_STORE_CTX_get_error_depth(ctx);
+    if (depth != 0)
+        return 1;
+
+    X509 *cert = X509_STORE_CTX_get_current_cert(ctx);
+    if (!cert)
+        return 0;
+
+    if (!libp2p_tls_verify_peer_cert(cert, NULL, identity->callbacks)) {
+        tls_dbg("openssl verify callback: peer certificate verification failed\n");
+        return 0;
+    }
+    tls_dbg("openssl verify callback: peer certificate verified\n");
+    return 1;
 }
 
 #endif /* HAS_LSQUIC */
