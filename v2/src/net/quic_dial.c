@@ -167,6 +167,10 @@ static void quic_on_conn_closed(lsquic_conn_t *c)
         return;
     struct quic_dial_ctx *dial = (struct quic_dial_ctx *)conn_ctx;
     dial->error = 1;
+    /* lsquic frees the connection and its streams after this callback. */
+    dial->conn = NULL;
+    dial->outbound_stream = NULL;
+    dial->inbound_stream = NULL;
     quic_dbg("QUIC connection closed\n");
 }
 
@@ -203,10 +207,38 @@ static lsquic_stream_ctx_t *quic_on_new_stream(void *stream_if_ctx, lsquic_strea
     return (lsquic_stream_ctx_t *)dial;
 }
 
+/* Data is pulled synchronously via lsquic_stream_read/write, but lsquic
+ * invokes these callbacks unconditionally and does not NULL-check them. */
+static void quic_on_read(lsquic_stream_t *s, lsquic_stream_ctx_t *h)
+{
+    (void)h;
+    lsquic_stream_wantread(s, 0);
+}
+
+static void quic_on_write(lsquic_stream_t *s, lsquic_stream_ctx_t *h)
+{
+    (void)h;
+    lsquic_stream_wantwrite(s, 0);
+}
+
+static void quic_on_close(lsquic_stream_t *s, lsquic_stream_ctx_t *h)
+{
+    struct quic_dial_ctx *dial = (struct quic_dial_ctx *)h;
+    if (!dial)
+        return;
+    if (dial->outbound_stream == s)
+        dial->outbound_stream = NULL;
+    if (dial->inbound_stream == s)
+        dial->inbound_stream = NULL;
+}
+
 static const struct lsquic_stream_if quic_stream_if = {
     .on_new_conn = quic_on_new_conn,
     .on_conn_closed = quic_on_conn_closed,
     .on_new_stream = quic_on_new_stream,
+    .on_read = quic_on_read,
+    .on_write = quic_on_write,
+    .on_close = quic_on_close,
     .on_hsk_done = quic_on_hsk_done,
 };
 
@@ -258,7 +290,10 @@ static void quic_stream_close(struct Libp2pV2Stream *stream)
         return;
     struct quic_stream_ctx *sc = (struct quic_stream_ctx *)stream->stream_context;
     if (sc) {
-        if (sc->ls_stream)
+        /* Only close streams lsquic still owns (on_close clears the rest). */
+        if (sc->ls_stream && sc->dial &&
+            (sc->dial->outbound_stream == sc->ls_stream ||
+             sc->dial->inbound_stream == sc->ls_stream))
             lsquic_stream_close(sc->ls_stream);
         if (sc->dial && sc->owns_dial) {
             if (sc->dial->conn)
