@@ -5,6 +5,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <pthread.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -17,6 +18,7 @@
 #include "libp2p/net/quic.h"
 #include "libp2p/conn/tls.h"
 #include "libp2p/utils/debug.h"
+#include "libp2p/utils/logger.h"
 
 #define QUIC_LISTEN_ACCEPT_TIMEOUT_MS 30000
 #define QUIC_LISTEN_READ_TIMEOUT_MS   30000
@@ -103,6 +105,7 @@ static int quic_listen_packets_out(void *ctx, const struct lsquic_out_spec *spec
             if (n < 0) {
                 if (errno == EAGAIN || errno == EWOULDBLOCK)
                     return total;
+                libp2p_v2_logger_error("quic-listen", "sendto failed: %s\n", strerror(errno));
                 return -1;
             }
             total++;
@@ -152,6 +155,7 @@ static lsquic_conn_ctx_t *quic_listen_on_new_conn(void *stream_if_ctx, lsquic_co
     listener->pending = conn;
     pthread_mutex_unlock(&listener->lock);
 
+    libp2p_v2_logger_info("quic-listen", "new inbound QUIC connection\n");
     quic_dbg("new inbound QUIC connection\n");
     return (lsquic_conn_ctx_t *)conn;
 }
@@ -164,6 +168,7 @@ static void quic_listen_on_conn_closed(lsquic_conn_t *c)
     struct quic_listen_conn *conn = (struct quic_listen_conn *)conn_ctx;
     conn->handshake_status = -1;
     conn->conn = NULL;
+    libp2p_v2_logger_info("quic-listen", "QUIC connection closed\n");
     quic_dbg("QUIC connection closed\n");
     quic_listen_conn_release(conn);
 }
@@ -176,9 +181,11 @@ static void quic_listen_on_hsk_done(lsquic_conn_t *c, enum lsquic_hsk_status s)
     struct quic_listen_conn *conn = (struct quic_listen_conn *)conn_ctx;
     if (s == LSQ_HSK_OK || s == LSQ_HSK_RESUMED_OK) {
         conn->handshake_status = 1;
+        libp2p_v2_logger_info("quic-listen", "QUIC handshake complete\n");
         quic_dbg("QUIC handshake complete\n");
     } else {
         conn->handshake_status = -1;
+        libp2p_v2_logger_info("quic-listen", "QUIC handshake failed: %d\n", s);
         quic_dbg("QUIC handshake failed: %d\n", s);
     }
 }
@@ -199,6 +206,7 @@ static lsquic_stream_ctx_t *quic_listen_on_new_stream(void *stream_if_ctx, lsqui
      * write our response. */
     lsquic_stream_wantread(s, 1);
     lsquic_stream_wantwrite(s, 1);
+    libp2p_v2_logger_info("quic-listen", "new QUIC stream ready (outbound=%d)\n", lc->expecting_outbound);
     quic_dbg("new QUIC stream ready (outbound=%d)\n", lc->expecting_outbound);
 
     return (lsquic_stream_ctx_t *)lc;
@@ -241,8 +249,10 @@ static ssize_t quic_listen_stream_read(struct Libp2pV2Stream *stream, unsigned c
     ssize_t n = lsquic_stream_read(sc->ls_stream, buf, count);
     if (n > 0)
         return n;
-    if (n < 0)
+    if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+        libp2p_v2_logger_error("quic-listen", "lsquic_stream_read error: %s\n", strerror(errno));
         return -1;
+    }
 
     struct Libp2pQuicListener *listener = sc->listener;
     int waited = 0;
@@ -252,11 +262,14 @@ static ssize_t quic_listen_stream_read(struct Libp2pV2Stream *stream, unsigned c
         n = lsquic_stream_read(sc->ls_stream, buf, count);
         if (n > 0)
             return n;
-        if (n < 0)
+        if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+            libp2p_v2_logger_error("quic-listen", "lsquic_stream_read error after poll: %s\n", strerror(errno));
             return -1;
+        }
         quic_listener_pump(listener, 10);
         waited += 10;
     }
+    libp2p_v2_logger_info("quic-listen", "stream read timed out after %d ms\n", QUIC_LISTEN_READ_TIMEOUT_MS);
     return 0;
 }
 
@@ -266,10 +279,14 @@ static ssize_t quic_listen_stream_write(struct Libp2pV2Stream *stream, const uns
     if (!sc || !sc->ls_stream)
         return -1;
 
+    lsquic_stream_wantwrite(sc->ls_stream, 1);
     ssize_t n = lsquic_stream_write(sc->ls_stream, buf, count);
     if (n > 0) {
         lsquic_stream_flush(sc->ls_stream);
         lsquic_engine_process_conns(sc->listener->engine);
+        libp2p_v2_logger_info("quic-listen", "stream wrote %zd/%zu bytes\n", n, count);
+    } else if (n < 0) {
+        libp2p_v2_logger_error("quic-listen", "lsquic_stream_write failed: %s\n", strerror(errno));
     }
     return n;
 }
@@ -353,6 +370,13 @@ struct Libp2pQuicListener* libp2p_net_quic_listener_new(const char *ip_address, 
 
     if (bind(fd, res->ai_addr, res->ai_addrlen) != 0) {
         quic_dbg("bind %s:%s failed: %s\n", ip_address, port_str, strerror(errno));
+        close(fd);
+        freeaddrinfo(res);
+        goto err;
+    }
+
+    int flags = fcntl(fd, F_GETFL, 0);
+    if (flags < 0 || fcntl(fd, F_SETFL, flags | O_NONBLOCK) != 0) {
         close(fd);
         freeaddrinfo(res);
         goto err;

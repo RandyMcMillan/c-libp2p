@@ -21,6 +21,7 @@
 #include "libp2p/crypto/key.h"
 #include "libp2p/crypto/rsa.h"
 #include "libp2p/utils/debug.h"
+#include "libp2p/utils/logger.h"
 
 #define TLS_HANDSHAKE_PREFIX "libp2p-tls-handshake:"
 #define TLS_HANDSHAKE_PREFIX_LEN (sizeof(TLS_HANDSHAKE_PREFIX) - 1)
@@ -73,21 +74,25 @@ static int tls_alpn_select_cb(SSL *ssl, const uint8_t **out, uint8_t *outlen,
     const uint8_t *p = in;
     unsigned remaining = inlen;
     const size_t alpn_len = sizeof(TLS_ALPN) - 1;
+    libp2p_v2_logger_info("tls", "ALPN select callback called with %u bytes\n", inlen);
     tls_dbg("ALPN select callback called with %u bytes\n", inlen);
     while (remaining > 0) {
         uint8_t proto_len = *p++;
         if (proto_len > remaining - 1)
             break;
+        libp2p_v2_logger_info("tls", "ALPN candidate len=%u '%.*s'\n", proto_len, proto_len, (const char *)p);
         tls_dbg("ALPN candidate len=%u '%.*s'\n", proto_len, proto_len, (const char *)p);
         if (proto_len == alpn_len && memcmp(p, TLS_ALPN, alpn_len) == 0) {
             *out = p;
             *outlen = proto_len;
+            libp2p_v2_logger_info("tls", "ALPN selected %s\n", TLS_ALPN);
             tls_dbg("ALPN selected %s\n", TLS_ALPN);
             return SSL_TLSEXT_ERR_OK;
         }
         p += proto_len;
         remaining -= (1 + proto_len);
     }
+    libp2p_v2_logger_error("tls", "ALPN no match, rejecting\n");
     tls_dbg("ALPN no match, rejecting\n");
     return SSL_TLSEXT_ERR_NOACK;
 }
@@ -394,15 +399,18 @@ int libp2p_tls_verify_peer_cert(X509 *cert,
 
     int ret = 0;
     if (X509_verify(cert, pubkey) != 1) {
+        libp2p_v2_logger_error("tls", "certificate self-signature invalid\n");
         tls_dbg("certificate self-signature invalid\n");
         goto cleanup;
     }
 
     if (X509_cmp_current_time(X509_get_notBefore(cert)) > 0) {
+        libp2p_v2_logger_error("tls", "certificate not yet valid\n");
         tls_dbg("certificate not yet valid\n");
         goto cleanup;
     }
     if (X509_cmp_current_time(X509_get_notAfter(cert)) < 0) {
+        libp2p_v2_logger_error("tls", "certificate expired\n");
         tls_dbg("certificate expired\n");
         goto cleanup;
     }
@@ -413,6 +421,7 @@ int libp2p_tls_verify_peer_cert(X509 *cert,
     int ext_idx = X509_get_ext_by_OBJ(cert, obj, -1);
     ASN1_OBJECT_free(obj);
     if (ext_idx < 0) {
+        libp2p_v2_logger_error("tls", "libp2p public key extension missing\n");
         tls_dbg("libp2p public key extension missing\n");
         goto cleanup;
     }
@@ -432,6 +441,7 @@ int libp2p_tls_verify_peer_cert(X509 *cert,
                               (size_t)ASN1_STRING_length(ext_value),
                               &identity_key, &identity_key_len,
                               &sig, &sig_len)) {
+        libp2p_v2_logger_error("tls", "failed to parse libp2p SignedKey extension\n");
         tls_dbg("failed to parse libp2p SignedKey extension\n");
         goto cleanup;
     }
@@ -439,6 +449,7 @@ int libp2p_tls_verify_peer_cert(X509 *cert,
     struct PublicKey *pub_key = NULL;
     if (!libp2p_crypto_public_key_protobuf_decode((unsigned char *)identity_key,
                                                   identity_key_len, &pub_key)) {
+        libp2p_v2_logger_error("tls", "failed to decode identity public key\n");
         tls_dbg("failed to decode identity public key\n");
         goto cleanup;
     }
@@ -452,6 +463,7 @@ int libp2p_tls_verify_peer_cert(X509 *cert,
         int match = (strcmp(peer_id, expected_peer_id) == 0);
         free(peer_id);
         if (!match) {
+            libp2p_v2_logger_error("tls", "peer ID mismatch: expected %s\n", expected_peer_id);
             tls_dbg("peer ID mismatch: expected %s\n", expected_peer_id);
             libp2p_crypto_public_key_free(pub_key);
             goto cleanup;
@@ -478,6 +490,7 @@ int libp2p_tls_verify_peer_cert(X509 *cert,
 
     if (!(callbacks->verify_raw ? callbacks->verify_raw : callbacks->verify)(
             identity_key, identity_key_len, to_verify, to_verify_len, sig, sig_len)) {
+        libp2p_v2_logger_error("tls", "libp2p extension signature invalid\n");
         tls_dbg("libp2p extension signature invalid\n");
         free(to_verify);
         libp2p_crypto_public_key_free(pub_key);
@@ -486,6 +499,7 @@ int libp2p_tls_verify_peer_cert(X509 *cert,
 
     free(to_verify);
     libp2p_crypto_public_key_free(pub_key);
+    libp2p_v2_logger_info("tls", "peer certificate verified\n");
     ret = 1;
 
 cleanup:
@@ -523,9 +537,11 @@ static int libp2p_tls_openssl_verify_callback(int preverify_ok, X509_STORE_CTX *
         return 0;
 
     if (!libp2p_tls_verify_peer_cert(cert, NULL, identity->callbacks)) {
+        libp2p_v2_logger_error("tls", "openssl verify callback: peer certificate verification failed\n");
         tls_dbg("openssl verify callback: peer certificate verification failed\n");
         return 0;
     }
+    libp2p_v2_logger_info("tls", "openssl verify callback: peer certificate verified\n");
     tls_dbg("openssl verify callback: peer certificate verified\n");
     return 1;
 }

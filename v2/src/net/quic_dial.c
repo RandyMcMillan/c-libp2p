@@ -5,6 +5,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
@@ -16,6 +17,7 @@
 #include "libp2p/net/quic.h"
 #include "libp2p/conn/tls.h"
 #include "libp2p/utils/debug.h"
+#include "libp2p/utils/logger.h"
 
 #define QUIC_DIAL_TIMEOUT_MS 30000
 #define QUIC_READ_TIMEOUT_MS 30000
@@ -115,6 +117,7 @@ static int quic_packets_out(void *ctx, const struct lsquic_out_spec *specs,
             if (n < 0) {
                 if (errno == EAGAIN || errno == EWOULDBLOCK)
                     return total;
+                libp2p_v2_logger_error("quic", "sendto failed: %s\n", strerror(errno));
                 return -1;
             }
             total++;
@@ -138,6 +141,7 @@ static int quic_verify_cert(void *verify_ctx, struct stack_st_X509 *chain)
     if (!dial || !chain)
         return -1;
     if (sk_X509_num(chain) != 1) {
+        libp2p_v2_logger_error("quic", "expected exactly one certificate, got %d\n", sk_X509_num(chain));
         quic_dbg("expected exactly one certificate, got %d\n", sk_X509_num(chain));
         return -1;
     }
@@ -145,9 +149,11 @@ static int quic_verify_cert(void *verify_ctx, struct stack_st_X509 *chain)
     if (!cert)
         return -1;
     if (!libp2p_tls_verify_peer_cert(cert, dial->expected_peer_id, dial->callbacks)) {
+        libp2p_v2_logger_error("quic", "peer certificate verification failed\n");
         quic_dbg("peer certificate verification failed\n");
         return -1;
     }
+    libp2p_v2_logger_info("quic", "peer certificate verified\n");
     quic_dbg("peer certificate verified\n");
     return 0;
 }
@@ -156,6 +162,7 @@ static lsquic_conn_ctx_t *quic_on_new_conn(void *stream_if_ctx, lsquic_conn_t *c
 {
     struct quic_dial_ctx *dial = (struct quic_dial_ctx *)stream_if_ctx;
     dial->conn = c;
+    libp2p_v2_logger_info("quic", "new QUIC connection\n");
     quic_dbg("new QUIC connection\n");
     return (lsquic_conn_ctx_t *)dial;
 }
@@ -171,6 +178,7 @@ static void quic_on_conn_closed(lsquic_conn_t *c)
     dial->conn = NULL;
     dial->outbound_stream = NULL;
     dial->inbound_stream = NULL;
+    libp2p_v2_logger_info("quic", "QUIC connection closed\n");
     quic_dbg("QUIC connection closed\n");
 }
 
@@ -182,10 +190,12 @@ static void quic_on_hsk_done(lsquic_conn_t *c, enum lsquic_hsk_status s)
     struct quic_dial_ctx *dial = (struct quic_dial_ctx *)conn_ctx;
     if (s == LSQ_HSK_OK || s == LSQ_HSK_RESUMED_OK) {
         dial->handshake_status = 1;
+        libp2p_v2_logger_info("quic", "QUIC handshake complete\n");
         quic_dbg("QUIC handshake complete\n");
         lsquic_conn_make_stream(c);
     } else {
         dial->handshake_status = -1;
+        libp2p_v2_logger_info("quic", "QUIC handshake failed: %d\n", s);
         quic_dbg("QUIC handshake failed: %d\n", s);
     }
 }
@@ -201,11 +211,13 @@ static lsquic_stream_ctx_t *quic_on_new_stream(void *stream_if_ctx, lsquic_strea
          * data for synchronous lsquic_stream_read calls. */
         lsquic_stream_wantwrite(s, 1);
         lsquic_stream_wantread(s, 1);
+        libp2p_v2_logger_info("quic", "outbound QUIC stream ready\n");
         quic_dbg("outbound QUIC stream ready\n");
     } else {
         dial->inbound_stream = s;
         dial->inbound_ready = 1;
         lsquic_stream_wantread(s, 1);
+        libp2p_v2_logger_info("quic", "inbound QUIC stream ready\n");
         quic_dbg("inbound QUIC stream ready\n");
     }
     return (lsquic_stream_ctx_t *)dial;
@@ -255,8 +267,13 @@ static ssize_t quic_stream_read(struct Libp2pV2Stream *stream, unsigned char *bu
     ssize_t n = lsquic_stream_read(sc->ls_stream, buf, count);
     if (n > 0)
         return n;
-    if (n < 0)
+
+    /* lsquic returns -1/EAGAIN when no data is available yet.  Treat that the
+     * same as zero and poll for QUIC_READ_TIMEOUT_MS before giving up. */
+    if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+        libp2p_v2_logger_error("quic", "lsquic_stream_read error: %s\n", strerror(errno));
         return -1;
+    }
 
     /* No buffered data: drive the engine until data arrives or timeout.
      * Re-enable read interest before each poll so lsquic continues to
@@ -269,11 +286,14 @@ static ssize_t quic_stream_read(struct Libp2pV2Stream *stream, unsigned char *bu
         n = lsquic_stream_read(sc->ls_stream, buf, count);
         if (n > 0)
             return n;
-        if (n < 0)
+        if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+            libp2p_v2_logger_error("quic", "lsquic_stream_read error after poll: %s\n", strerror(errno));
             return -1;
+        }
         quic_process_incoming(dial, 10);
         waited += 10;
     }
+    libp2p_v2_logger_info("quic", "stream read timed out after %d ms\n", QUIC_READ_TIMEOUT_MS);
     return 0;
 }
 
@@ -283,10 +303,16 @@ static ssize_t quic_stream_write(struct Libp2pV2Stream *stream, const unsigned c
     if (!sc || !sc->ls_stream)
         return -1;
 
+    lsquic_stream_wantwrite(sc->ls_stream, 1);
     ssize_t n = lsquic_stream_write(sc->ls_stream, buf, count);
     if (n > 0) {
         lsquic_stream_flush(sc->ls_stream);
         lsquic_engine_process_conns(sc->dial->engine);
+        libp2p_v2_logger_info("quic", "stream wrote %zd/%zu bytes\n", n, count);
+    } else if (n < 0) {
+        libp2p_v2_logger_error("quic", "lsquic_stream_write failed: %s\n", strerror(errno));
+    } else {
+        libp2p_v2_logger_info("quic", "lsquic_stream_write returned 0 for %zu bytes\n", count);
     }
     return n;
 }
@@ -339,6 +365,12 @@ static int quic_bind_local(int *out_fd, struct sockaddr_storage *out_addr, sockl
     }
 
     if (bind(fd, (struct sockaddr *)&addr, *out_len) != 0) {
+        close(fd);
+        return 0;
+    }
+
+    int flags = fcntl(fd, F_GETFL, 0);
+    if (flags < 0 || fcntl(fd, F_SETFL, flags | O_NONBLOCK) != 0) {
         close(fd);
         return 0;
     }
@@ -440,6 +472,7 @@ struct Libp2pV2Stream* libp2p_net_quic_dial(const char *ip_address, uint16_t por
     while (waited < QUIC_DIAL_TIMEOUT_MS) {
         quic_drive_engine(dial, 10);
         if (dial->handshake_status == -1 || dial->error) {
+            libp2p_v2_logger_error("quic", "QUIC dial failed during handshake\n");
             quic_dbg("QUIC dial failed during handshake\n");
             goto err;
         }
@@ -449,6 +482,7 @@ struct Libp2pV2Stream* libp2p_net_quic_dial(const char *ip_address, uint16_t por
     }
 
     if (!dial->outbound_ready) {
+        libp2p_v2_logger_error("quic", "QUIC dial timed out waiting for outbound stream\n");
         quic_dbg("QUIC dial timed out waiting for outbound stream\n");
         goto err;
     }
@@ -470,6 +504,7 @@ struct Libp2pV2Stream* libp2p_net_quic_dial(const char *ip_address, uint16_t por
     stream->write = quic_stream_write;
     stream->close = quic_stream_close;
 
+    libp2p_v2_logger_info("quic", "QUIC dial to %s:%u succeeded\n", ip_address, port);
     quic_dbg("QUIC dial to %s:%u succeeded\n", ip_address, port);
     return stream;
 
