@@ -342,15 +342,14 @@ static void quic_stream_close(struct Libp2pV2Stream *stream)
     struct quic_stream_ctx *sc = (struct quic_stream_ctx *)stream->stream_context;
     if (sc) {
         /* Only close streams lsquic still owns (on_close clears the rest).
-         * Disable read/write interest before closing so that the subsequent
-         * lsquic_engine_process_conns() does not deliver on_read/on_write
-         * callbacks for a stream that is already closing; that re-entrancy
-         * caused a daemon segfault in the c-ipfs QUIC Identify path. */
+         * Disable read interest before closing so that the subsequent
+         * lsquic_engine_process_conns() does not deliver on_read callbacks for
+         * a stream that is already closing; keep write interest so the STREAM
+         * FIN can be flushed. */
         if (sc->ls_stream && sc->dial &&
             (sc->dial->outbound_stream == sc->ls_stream ||
              sc->dial->inbound_stream == sc->ls_stream)) {
             lsquic_stream_wantread(sc->ls_stream, 0);
-            lsquic_stream_wantwrite(sc->ls_stream, 0);
             lsquic_stream_close(sc->ls_stream);
         }
         if (sc->dial && sc->dial->engine)

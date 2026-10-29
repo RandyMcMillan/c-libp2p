@@ -300,12 +300,12 @@ static void quic_listen_stream_close(struct Libp2pV2Stream *stream)
         return;
     struct quic_listen_stream_ctx *sc = (struct quic_listen_stream_ctx *)stream->stream_context;
     if (sc) {
-        /* Disable read/write interest before closing so that the subsequent
-         * lsquic_engine_process_conns() does not deliver callbacks for a
-         * stream that is already closing; then flush the STREAM FIN. */
+        /* Disable read interest before closing so that the subsequent
+         * lsquic_engine_process_conns() does not deliver on_read callbacks for
+         * a stream that is already closing; keep write interest so the STREAM
+         * FIN can be flushed. */
         if (sc->ls_stream) {
             lsquic_stream_wantread(sc->ls_stream, 0);
-            lsquic_stream_wantwrite(sc->ls_stream, 0);
             lsquic_stream_close(sc->ls_stream);
         }
         if (sc->listener && sc->listener->engine)
