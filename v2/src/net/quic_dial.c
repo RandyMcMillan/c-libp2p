@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <unistd.h>
 #include <errno.h>
 #include <sys/socket.h>
@@ -19,6 +20,7 @@
 
 #define QUIC_DIAL_TIMEOUT_MS 30000
 #define QUIC_READ_TIMEOUT_MS 30000
+#define QUIC_RX_BUF_SIZE 4096
 
 struct quic_dial_ctx {
     lsquic_engine_t *engine;
@@ -43,6 +45,8 @@ struct quic_stream_ctx {
     struct quic_dial_ctx *dial;
     lsquic_stream_t *ls_stream;
     int owns_dial; /* true for the outbound stream; frees engine on close */
+    unsigned char write_buf[QUIC_RX_BUF_SIZE];
+    size_t write_len;
 };
 
 static int quic_debug_scope_enabled(void)
@@ -96,6 +100,30 @@ static void quic_drive_engine(struct quic_dial_ctx *dial, int max_wait_ms)
     lsquic_engine_process_conns(dial->engine);
 }
 
+static int quic_log_buf(void *ctx, const char *buf, size_t len)
+{
+    (void)ctx;
+    if (len == 0)
+        return 0;
+    int match = 0;
+    for (size_t i = 0; i + 4 < len; i++) {
+        if (strncasecmp(buf + i, "send", 4) == 0 ||
+            strncasecmp(buf + i, "pack", 4) == 0 ||
+            strncasecmp(buf + i, "ack", 3) == 0 ||
+            strncasecmp(buf + i, "stream", 6) == 0) {
+            match = 1;
+            break;
+        }
+    }
+    if (match) {
+        fwrite(buf, 1, len, stderr);
+        if (buf[len - 1] != '\n')
+            fputc('\n', stderr);
+        fflush(stderr);
+    }
+    return (int)len;
+}
+
 static int quic_packets_out(void *ctx, const struct lsquic_out_spec *specs,
                             unsigned n_packets_out)
 {
@@ -115,6 +143,7 @@ static int quic_packets_out(void *ctx, const struct lsquic_out_spec *specs,
             if (n < 0) {
                 if (errno == EAGAIN || errno == EWOULDBLOCK)
                     return total;
+                quic_dbg("packets_out sendto error: %s\n", strerror(errno));
                 return -1;
             }
             total++;
@@ -167,6 +196,7 @@ static void quic_on_conn_closed(lsquic_conn_t *c)
         return;
     struct quic_dial_ctx *dial = (struct quic_dial_ctx *)conn_ctx;
     dial->error = 1;
+    dial->conn = NULL;
     quic_dbg("QUIC connection closed\n");
 }
 
@@ -192,7 +222,7 @@ static lsquic_stream_ctx_t *quic_on_new_stream(void *stream_if_ctx, lsquic_strea
     if (!dial->outbound_ready) {
         dial->outbound_stream = s;
         dial->outbound_ready = 1;
-        lsquic_stream_wantwrite(s, 1);
+        lsquic_stream_wantread(s, 1);
         quic_dbg("outbound QUIC stream ready\n");
     } else {
         dial->inbound_stream = s;
@@ -203,11 +233,35 @@ static lsquic_stream_ctx_t *quic_on_new_stream(void *stream_if_ctx, lsquic_strea
     return (lsquic_stream_ctx_t *)dial;
 }
 
+/* Stream callbacks are intentionally no-ops: the application drives QUIC I/O
+ * synchronously via quic_stream_read/write.  This avoids reentrancy and
+ * type-confusion issues while keeping lsquic's event dispatch stable. */
+static void quic_on_read(lsquic_stream_t *s, lsquic_stream_ctx_t *h)
+{
+    (void)s;
+    (void)h;
+}
+
+static void quic_on_write(lsquic_stream_t *s, lsquic_stream_ctx_t *h)
+{
+    (void)s;
+    (void)h;
+}
+
+static void quic_on_close(lsquic_stream_t *s, lsquic_stream_ctx_t *h)
+{
+    (void)s;
+    (void)h;
+}
+
 static const struct lsquic_stream_if quic_stream_if = {
     .on_new_conn = quic_on_new_conn,
     .on_conn_closed = quic_on_conn_closed,
     .on_new_stream = quic_on_new_stream,
     .on_hsk_done = quic_on_hsk_done,
+    .on_read = quic_on_read,
+    .on_write = quic_on_write,
+    .on_close = quic_on_close,
 };
 
 static ssize_t quic_stream_read(struct Libp2pV2Stream *stream, unsigned char *buf, size_t count)
@@ -216,25 +270,26 @@ static ssize_t quic_stream_read(struct Libp2pV2Stream *stream, unsigned char *bu
     if (!sc || !sc->ls_stream)
         return -1;
 
-    ssize_t n = lsquic_stream_read(sc->ls_stream, buf, count);
-    if (n > 0)
-        return n;
-    if (n < 0)
-        return -1;
-
-    /* No buffered data: drive the engine until data arrives or timeout. */
     struct quic_dial_ctx *dial = sc->dial;
     int waited = 0;
     while (waited < QUIC_READ_TIMEOUT_MS) {
-        lsquic_engine_process_conns(dial->engine);
-        n = lsquic_stream_read(sc->ls_stream, buf, count);
+        ssize_t n = lsquic_stream_read(sc->ls_stream, buf, count);
         if (n > 0)
             return n;
-        if (n < 0)
+        if (n == 0)
+            return 0;
+        if (errno != EAGAIN && errno != EWOULDBLOCK) {
+            quic_dbg("stream read error sid=%lu: %s\n",
+                     (unsigned long)lsquic_stream_id(sc->ls_stream), strerror(errno));
             return -1;
+        }
+
+        /* No data available: read a packet, process the engine, and try again. */
         quic_process_incoming(dial, 10);
+        lsquic_engine_process_conns(dial->engine);
         waited += 10;
     }
+    quic_dbg("stream read timed out sid=%lu\n", (unsigned long)lsquic_stream_id(sc->ls_stream));
     return 0;
 }
 
@@ -244,12 +299,44 @@ static ssize_t quic_stream_write(struct Libp2pV2Stream *stream, const unsigned c
     if (!sc || !sc->ls_stream)
         return -1;
 
-    ssize_t n = lsquic_stream_write(sc->ls_stream, buf, count);
-    if (n > 0) {
-        lsquic_stream_flush(sc->ls_stream);
-        lsquic_engine_process_conns(sc->dial->engine);
+    if (count == 0)
+        return 0;
+    if (count > sizeof(sc->write_buf) - sc->write_len) {
+        quic_dbg("stream_write buffer overflow sid=%lu count=%zu pending=%zu\n",
+                 (unsigned long)lsquic_stream_id(sc->ls_stream), count, sc->write_len);
+        return -1;
     }
-    return n;
+
+    memcpy(sc->write_buf + sc->write_len, buf, count);
+    sc->write_len += count;
+
+    /* Synchronously drain the per-stream write buffer.  Pump the engine between
+     * partial writes so lsquic can send data and receive ACKs. */
+    int waited = 0;
+    while (sc->write_len > 0 && waited < QUIC_DIAL_TIMEOUT_MS) {
+        ssize_t n = lsquic_stream_write(sc->ls_stream, sc->write_buf, sc->write_len);
+        quic_dbg("stream_write attempt sid=%lu pending=%zu n=%zd errno=%d\n",
+                 (unsigned long)lsquic_stream_id(sc->ls_stream), sc->write_len, n, n < 0 ? errno : 0);
+        if (n > 0) {
+            if ((size_t)n < sc->write_len)
+                memmove(sc->write_buf, sc->write_buf + n, sc->write_len - n);
+            sc->write_len -= (size_t)n;
+            lsquic_stream_flush(sc->ls_stream);
+        } else if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+            quic_dbg("stream_write error sid=%lu: %s\n",
+                     (unsigned long)lsquic_stream_id(sc->ls_stream), strerror(errno));
+            return -1;
+        }
+        if (sc->write_len > 0) {
+            lsquic_engine_process_conns(sc->dial->engine);
+            quic_process_incoming(sc->dial, 10);
+            waited += 10;
+        }
+    }
+
+    quic_dbg("stream_write sid=%lu count=%zu pending=%zu\n",
+             (unsigned long)lsquic_stream_id(sc->ls_stream), count, sc->write_len);
+    return sc->write_len == 0 ? (ssize_t)count : -1;
 }
 
 static void quic_stream_close(struct Libp2pV2Stream *stream)
@@ -258,22 +345,28 @@ static void quic_stream_close(struct Libp2pV2Stream *stream)
         return;
     struct quic_stream_ctx *sc = (struct quic_stream_ctx *)stream->stream_context;
     if (sc) {
-        if (sc->ls_stream)
+        quic_dbg("stream_close sid=%lu owns_dial=%d ENTER\n",
+                 (unsigned long)(sc->ls_stream ? lsquic_stream_id(sc->ls_stream) : 0),
+                 sc->owns_dial);
+        if (sc->ls_stream) {
             lsquic_stream_close(sc->ls_stream);
+            sc->ls_stream = NULL;
+        }
         if (sc->dial && sc->owns_dial) {
-            if (sc->dial->conn)
-                lsquic_conn_close(sc->dial->conn);
-            if (sc->dial->engine)
-                lsquic_engine_destroy(sc->dial->engine);
-            if (sc->dial->udp_fd >= 0)
-                close(sc->dial->udp_fd);
-            libp2p_tls_identity_free(sc->dial->tls_identity);
-            free(sc->dial->expected_peer_id);
-            free(sc->dial);
+            struct quic_dial_ctx *dial = sc->dial;
+            /* XXX: Synchronous teardown of an active lsquic client connection
+             * reliably hangs or segfaults inside lsquic's send_ctl cleanup
+             * when the connection still has in-flight packets.  Until that is
+             * root-caused, leave the QUIC engine/connection open.  The dial
+             * context is owned by the caller (e.g. the v2 bridge) and should
+             * be kept alive for the lifetime of the peer connection. */
+            (void)dial;
+            sc->dial = NULL;
         }
         free(sc);
     }
     free(stream);
+    quic_dbg("stream_close EXIT\n");
 }
 
 static int quic_bind_local(int *out_fd, struct sockaddr_storage *out_addr, socklen_t *out_len,
@@ -364,6 +457,12 @@ struct Libp2pV2Stream* libp2p_net_quic_dial(const char *ip_address, uint16_t por
 
     lsquic_global_init(LSQUIC_GLOBAL_CLIENT);
 
+    if (quic_debug_scope_enabled()) {
+        static struct lsquic_logger_if logger_if = { quic_log_buf };
+        lsquic_logger_init(&logger_if, NULL, LLTS_HHMMSSMS);
+        lsquic_set_log_level("debug");
+    }
+
     struct lsquic_engine_api api;
     memset(&api, 0, sizeof(api));
     api.ea_stream_if = &quic_stream_if;
@@ -377,6 +476,9 @@ struct Libp2pV2Stream* libp2p_net_quic_dial(const char *ip_address, uint16_t por
 
     struct lsquic_engine_settings settings;
     lsquic_engine_init_settings(&settings, 0);
+    settings.es_init_max_streams_bidi = 100;
+    settings.es_init_max_stream_data_bidi_local = 1 * 1024 * 1024;
+    settings.es_init_max_stream_data_bidi_remote = 1 * 1024 * 1024;
     api.ea_settings = &settings;
 
     dial->engine = lsquic_engine_new(0, &api);
@@ -410,6 +512,10 @@ struct Libp2pV2Stream* libp2p_net_quic_dial(const char *ip_address, uint16_t por
         quic_dbg("QUIC dial timed out waiting for outbound stream\n");
         goto err;
     }
+
+    /* Flush the final handshake packets and the newly created outbound stream
+     * so the peer can complete the handshake and open its Identify stream. */
+    quic_drive_engine(dial, 0);
 
     struct quic_stream_ctx *sc = (struct quic_stream_ctx *)calloc(1, sizeof(*sc));
     if (!sc)

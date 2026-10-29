@@ -201,11 +201,32 @@ static lsquic_stream_ctx_t *quic_listen_on_new_stream(void *stream_if_ctx, lsqui
     return (lsquic_stream_ctx_t *)lc;
 }
 
+static void quic_listen_on_read(lsquic_stream_t *s, lsquic_stream_ctx_t *h)
+{
+    (void)s;
+    (void)h;
+}
+
+static void quic_listen_on_write(lsquic_stream_t *s, lsquic_stream_ctx_t *h)
+{
+    (void)s;
+    (void)h;
+}
+
+static void quic_listen_on_close(lsquic_stream_t *s, lsquic_stream_ctx_t *h)
+{
+    (void)s;
+    (void)h;
+}
+
 static const struct lsquic_stream_if quic_listen_stream_if = {
     .on_new_conn = quic_listen_on_new_conn,
     .on_conn_closed = quic_listen_on_conn_closed,
     .on_new_stream = quic_listen_on_new_stream,
     .on_hsk_done = quic_listen_on_hsk_done,
+    .on_read = quic_listen_on_read,
+    .on_write = quic_listen_on_write,
+    .on_close = quic_listen_on_close,
 };
 
 static ssize_t quic_listen_stream_read(struct Libp2pV2Stream *stream, unsigned char *buf, size_t count)
@@ -358,6 +379,9 @@ struct Libp2pQuicListener* libp2p_net_quic_listener_new(const char *ip_address, 
 
     struct lsquic_engine_settings settings;
     lsquic_engine_init_settings(&settings, LSENG_SERVER);
+    settings.es_init_max_streams_bidi = 100;
+    settings.es_init_max_stream_data_bidi_local = 1 * 1024 * 1024;
+    settings.es_init_max_stream_data_bidi_remote = 1 * 1024 * 1024;
     api.ea_settings = &settings;
 
     listener->engine = lsquic_engine_new(LSENG_SERVER, &api);

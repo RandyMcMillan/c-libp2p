@@ -23,7 +23,7 @@
 #include "libp2p/utils/debug.h"
 
 #define TLS_HANDSHAKE_PREFIX "libp2p-tls-handshake:"
-#define TLS_HANDSHAKE_PREFIX_LEN 23
+#define TLS_HANDSHAKE_PREFIX_LEN (sizeof(TLS_HANDSHAKE_PREFIX) - 1)
 #define TLS_ALPN "libp2p"
 
 /* OID 1.3.6.1.4.1.53594.1.1 allocated to libp2p by IANA. */
@@ -63,6 +63,33 @@ static void tls_dbg(const char *fmt, ...)
     vfprintf(stderr, fmt, ap);
     va_end(ap);
     fflush(stderr);
+}
+
+static int tls_alpn_select_cb(SSL *ssl, const uint8_t **out, uint8_t *outlen,
+                              const uint8_t *in, unsigned inlen, void *arg)
+{
+    (void)ssl;
+    (void)arg;
+    const uint8_t *p = in;
+    unsigned remaining = inlen;
+    const size_t alpn_len = sizeof(TLS_ALPN) - 1;
+    tls_dbg("ALPN select callback called with %u bytes\n", inlen);
+    while (remaining > 0) {
+        uint8_t proto_len = *p++;
+        if (proto_len > remaining - 1)
+            break;
+        tls_dbg("ALPN candidate len=%u '%.*s'\n", proto_len, proto_len, (const char *)p);
+        if (proto_len == alpn_len && memcmp(p, TLS_ALPN, alpn_len) == 0) {
+            *out = p;
+            *outlen = proto_len;
+            tls_dbg("ALPN selected %s\n", TLS_ALPN);
+            return SSL_TLSEXT_ERR_OK;
+        }
+        p += proto_len;
+        remaining -= (1 + proto_len);
+    }
+    tls_dbg("ALPN no match, rejecting\n");
+    return SSL_TLSEXT_ERR_NOACK;
 }
 
 /* Build the SignedKey ASN.1 structure: SEQUENCE { publicKey OCTET STRING,
@@ -306,11 +333,16 @@ struct Libp2pTlsIdentity* libp2p_tls_identity_new(void *private_key,
     if (SSL_CTX_use_PrivateKey(identity->ssl_ctx, identity->cert_key) != 1)
         goto err;
 
-    /* ALPN "libp2p" for both client and server. */
-    static const uint8_t alpn[] = TLS_ALPN;
-    size_t alpn_len = sizeof(alpn) - 1;
-    if (SSL_CTX_set_alpn_protos(identity->ssl_ctx, alpn, (unsigned)alpn_len) != 0)
+    /* ALPN "libp2p" for both client and server. RFC 7301 length-prefixed. */
+    const size_t alpn_proto_len = sizeof(TLS_ALPN) - 1;
+    uint8_t alpn[1 + sizeof(TLS_ALPN) - 1];
+    alpn[0] = (uint8_t)alpn_proto_len;
+    memcpy(alpn + 1, TLS_ALPN, alpn_proto_len);
+    if (SSL_CTX_set_alpn_protos(identity->ssl_ctx, alpn, sizeof(alpn)) != 0)
         tls_dbg("warning: SSL_CTX_set_alpn_protos failed\n");
+    /* Server side: lsquic/BoringSSL needs a select callback to advertise the
+     * ALPN response. */
+    SSL_CTX_set_alpn_select_cb(identity->ssl_ctx, tls_alpn_select_cb, NULL);
 
     callbacks->free_buffer(identity_key);
     callbacks->free_buffer(sig);
@@ -363,11 +395,11 @@ int libp2p_tls_verify_peer_cert(X509 *cert,
         goto cleanup;
     }
 
-    if (X509_cmp_current_time(X509_get_notBefore(cert)) < 0) {
+    if (X509_cmp_current_time(X509_get_notBefore(cert)) > 0) {
         tls_dbg("certificate not yet valid\n");
         goto cleanup;
     }
-    if (X509_cmp_current_time(X509_get_notAfter(cert)) > 0) {
+    if (X509_cmp_current_time(X509_get_notAfter(cert)) < 0) {
         tls_dbg("certificate expired\n");
         goto cleanup;
     }
