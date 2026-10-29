@@ -203,7 +203,14 @@ static void quic_on_hsk_done(lsquic_conn_t *c, enum lsquic_hsk_status s)
 static lsquic_stream_ctx_t *quic_on_new_stream(void *stream_if_ctx, lsquic_stream_t *s)
 {
     struct quic_dial_ctx *dial = (struct quic_dial_ctx *)stream_if_ctx;
-    if (!dial->outbound_ready) {
+    lsquic_stream_id_t stream_id = lsquic_stream_id(s);
+    /* On a client connection, locally-initiated bidirectional streams have
+     * IDs congruent to 0 mod 4; peer-initiated bidirectional streams are 1 mod
+     * 4.  Classify by ID rather than arrival order so a server-initiated
+     * Identify stream is not mistaken for the outbound stream. */
+    int is_local_bidi = (stream_id % 4 == 0);
+
+    if (is_local_bidi) {
         dial->outbound_stream = s;
         dial->outbound_ready = 1;
         /* Outbound bidirectional streams carry both our writes and the peer's
@@ -211,14 +218,21 @@ static lsquic_stream_ctx_t *quic_on_new_stream(void *stream_if_ctx, lsquic_strea
          * data for synchronous lsquic_stream_read calls. */
         lsquic_stream_wantwrite(s, 1);
         lsquic_stream_wantread(s, 1);
-        libp2p_v2_logger_info("quic", "outbound QUIC stream ready\n");
-        quic_dbg("outbound QUIC stream ready\n");
+        libp2p_v2_logger_info("quic", "outbound QUIC stream ready (id=%llu)\n",
+                              (unsigned long long)stream_id);
+        quic_dbg("outbound QUIC stream ready (id=%llu)\n",
+                 (unsigned long long)stream_id);
     } else {
         dial->inbound_stream = s;
         dial->inbound_ready = 1;
+        /* Inbound streams are bidirectional: we read the peer's request and
+         * write our Identify response. */
+        lsquic_stream_wantwrite(s, 1);
         lsquic_stream_wantread(s, 1);
-        libp2p_v2_logger_info("quic", "inbound QUIC stream ready\n");
-        quic_dbg("inbound QUIC stream ready\n");
+        libp2p_v2_logger_info("quic", "inbound QUIC stream ready (id=%llu)\n",
+                              (unsigned long long)stream_id);
+        quic_dbg("inbound QUIC stream ready (id=%llu)\n",
+                 (unsigned long long)stream_id);
     }
     return (lsquic_stream_ctx_t *)dial;
 }
