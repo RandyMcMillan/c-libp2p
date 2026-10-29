@@ -223,12 +223,13 @@ static lsquic_stream_ctx_t *quic_on_new_stream(void *stream_if_ctx, lsquic_strea
     return (lsquic_stream_ctx_t *)dial;
 }
 
-/* Data is pulled synchronously via lsquic_stream_read/write, but lsquic
- * invokes these callbacks unconditionally and does not NULL-check them. */
+/* Data is pulled synchronously via lsquic_stream_read/write.  Keep read
+ * interest armed so lsquic continues to buffer incoming data until the
+ * synchronous reader consumes it. */
 static void quic_on_read(lsquic_stream_t *s, lsquic_stream_ctx_t *h)
 {
     (void)h;
-    lsquic_stream_wantread(s, 0);
+    lsquic_stream_wantread(s, 1);
 }
 
 static void quic_on_write(lsquic_stream_t *s, lsquic_stream_ctx_t *h)
@@ -264,6 +265,7 @@ static ssize_t quic_stream_read(struct Libp2pV2Stream *stream, unsigned char *bu
     if (!sc || !sc->ls_stream)
         return -1;
 
+    lsquic_stream_wantread(sc->ls_stream, 1);
     ssize_t n = lsquic_stream_read(sc->ls_stream, buf, count);
     if (n > 0)
         return n;
@@ -276,13 +278,15 @@ static ssize_t quic_stream_read(struct Libp2pV2Stream *stream, unsigned char *bu
     }
 
     /* No buffered data: drive the engine until data arrives or timeout.
-     * Re-enable read interest before each poll so lsquic continues to
-     * deliver incoming data after the on_read callback disables it. */
+     * Re-enable read interest before each poll and before each read so that
+     * an on_read callback that fires while we are between reads cannot leave
+     * the stream without read interest. */
     struct quic_dial_ctx *dial = sc->dial;
     int waited = 0;
     while (waited < QUIC_READ_TIMEOUT_MS) {
         lsquic_stream_wantread(sc->ls_stream, 1);
         lsquic_engine_process_conns(dial->engine);
+        lsquic_stream_wantread(sc->ls_stream, 1);
         n = lsquic_stream_read(sc->ls_stream, buf, count);
         if (n > 0)
             return n;

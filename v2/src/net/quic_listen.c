@@ -214,8 +214,9 @@ static lsquic_stream_ctx_t *quic_listen_on_new_stream(void *stream_if_ctx, lsqui
 
 static void quic_listen_on_read(lsquic_stream_t *s, lsquic_stream_ctx_t *h)
 {
-    (void)s;
     (void)h;
+    /* Keep read interest armed for the synchronous reader. */
+    lsquic_stream_wantread(s, 1);
 }
 
 static void quic_listen_on_write(lsquic_stream_t *s, lsquic_stream_ctx_t *h)
@@ -246,6 +247,7 @@ static ssize_t quic_listen_stream_read(struct Libp2pV2Stream *stream, unsigned c
     if (!sc || !sc->ls_stream)
         return -1;
 
+    lsquic_stream_wantread(sc->ls_stream, 1);
     ssize_t n = lsquic_stream_read(sc->ls_stream, buf, count);
     if (n > 0)
         return n;
@@ -259,6 +261,7 @@ static ssize_t quic_listen_stream_read(struct Libp2pV2Stream *stream, unsigned c
     while (waited < QUIC_LISTEN_READ_TIMEOUT_MS) {
         lsquic_stream_wantread(sc->ls_stream, 1);
         lsquic_engine_process_conns(listener->engine);
+        lsquic_stream_wantread(sc->ls_stream, 1);
         n = lsquic_stream_read(sc->ls_stream, buf, count);
         if (n > 0)
             return n;
