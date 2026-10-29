@@ -26,6 +26,7 @@ struct quic_listen_conn {
     int handshake_status; /* 0 = pending, 1 = ok, -1 = failed */
     int stream_ready;
     int expecting_outbound;
+    int ref_count;
     lsquic_stream_t *stream;
     struct quic_listen_conn *next;
 };
@@ -47,6 +48,15 @@ struct quic_listen_stream_ctx {
     struct quic_listen_conn *conn;
     lsquic_stream_t *ls_stream;
 };
+
+static void quic_listen_conn_release(struct quic_listen_conn *conn)
+{
+    if (!conn)
+        return;
+    conn->ref_count--;
+    if (conn->ref_count <= 0)
+        free(conn);
+}
 
 static int quic_debug_scope_enabled(void)
 {
@@ -135,6 +145,7 @@ static lsquic_conn_ctx_t *quic_listen_on_new_conn(void *stream_if_ctx, lsquic_co
     conn->conn = c;
     conn->handshake_status = 0;
     conn->stream_ready = 0;
+    conn->ref_count = 1;
 
     pthread_mutex_lock(&listener->lock);
     conn->next = listener->pending;
@@ -152,7 +163,9 @@ static void quic_listen_on_conn_closed(lsquic_conn_t *c)
         return;
     struct quic_listen_conn *conn = (struct quic_listen_conn *)conn_ctx;
     conn->handshake_status = -1;
+    conn->conn = NULL;
     quic_dbg("QUIC connection closed\n");
+    quic_listen_conn_release(conn);
 }
 
 static void quic_listen_on_hsk_done(lsquic_conn_t *c, enum lsquic_hsk_status s)
@@ -244,8 +257,10 @@ static void quic_listen_stream_close(struct Libp2pV2Stream *stream)
     if (sc) {
         if (sc->ls_stream)
             lsquic_stream_close(sc->ls_stream);
-        if (sc->conn)
+        if (sc->conn) {
             sc->conn->stream_ready = 0;
+            quic_listen_conn_release(sc->conn);
+        }
         free(sc);
     }
     free(stream);
@@ -258,6 +273,7 @@ static struct quic_listen_conn *listener_find_ready(struct Libp2pQuicListener *l
         struct quic_listen_conn *c = *curr;
         if (c->handshake_status == 1 && c->stream_ready) {
             *curr = c->next;
+            c->ref_count++;
             return c;
         }
         curr = &c->next;
@@ -428,6 +444,9 @@ struct Libp2pV2Stream* libp2p_net_quic_conn_open_stream(struct Libp2pV2Stream *a
 
     struct Libp2pQuicListener *listener = sc->listener;
     struct quic_listen_conn *lc = sc->conn;
+
+    /* Take a reference for the outbound stream we are about to create. */
+    lc->ref_count++;
 
     /* Reset state so the next on_new_stream callback is captured as the
      * outbound stream we are about to create. */
