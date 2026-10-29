@@ -38,12 +38,16 @@ static int noise_cb_get_identity_key(void *private_key, uint8_t **out_key, size_
     return 1;
 }
 
-static int noise_cb_sign(void *private_key, const uint8_t *data, size_t data_len,
-                         uint8_t **out_sig, size_t *out_len) {
+static int noise_cb_sign_raw(void *private_key, const uint8_t *data, size_t data_len,
+                             uint8_t **out_sig, size_t *out_len) {
     struct RsaPrivateKey *rsa = (struct RsaPrivateKey *)private_key;
     if (!rsa)
         return 0;
+    return libp2p_crypto_rsa_sign(rsa, (const char *)data, data_len, out_sig, out_len);
+}
 
+static int noise_cb_sign(void *private_key, const uint8_t *data, size_t data_len,
+                         uint8_t **out_sig, size_t *out_len) {
     char *to_sign = (char *)malloc(NOISE_SIG_PREFIX_LEN + data_len);
     if (!to_sign)
         return 0;
@@ -51,16 +55,15 @@ static int noise_cb_sign(void *private_key, const uint8_t *data, size_t data_len
     memcpy(to_sign, NOISE_SIG_PREFIX, NOISE_SIG_PREFIX_LEN);
     memcpy(to_sign + NOISE_SIG_PREFIX_LEN, data, data_len);
 
-    int ret = libp2p_crypto_rsa_sign(rsa, to_sign, NOISE_SIG_PREFIX_LEN + data_len, out_sig, out_len);
+    int ret = noise_cb_sign_raw(private_key, (const uint8_t *)to_sign, NOISE_SIG_PREFIX_LEN + data_len,
+                                out_sig, out_len);
     free(to_sign);
     return ret;
 }
 
-static int noise_cb_verify(const uint8_t *identity_key, size_t identity_key_len,
-                           const uint8_t *data, size_t data_len,
-                           const uint8_t *sig, size_t sig_len) {
-    (void)sig_len;
-
+static int noise_cb_verify_raw(const uint8_t *identity_key, size_t identity_key_len,
+                               const uint8_t *data, size_t data_len,
+                               const uint8_t *sig, size_t sig_len) {
     struct PublicKey *pub_key = NULL;
     if (!libp2p_crypto_public_key_protobuf_decode((unsigned char *)identity_key, identity_key_len, &pub_key))
         return 0;
@@ -71,29 +74,34 @@ static int noise_cb_verify(const uint8_t *identity_key, size_t identity_key_len,
         return 0;
     }
 
-    unsigned char *to_verify = (unsigned char *)malloc(NOISE_SIG_PREFIX_LEN + data_len);
-    if (!to_verify) {
-        libp2p_crypto_public_key_free(pub_key);
-        return 0;
-    }
-    memcpy(to_verify, NOISE_SIG_PREFIX, NOISE_SIG_PREFIX_LEN);
-    memcpy(to_verify + NOISE_SIG_PREFIX_LEN, data, data_len);
-
     int ret = 0;
     if (pub_key->type == KEYTYPE_RSA) {
         struct RsaPublicKey rsa_pub = {
             .der = pub_key->data,
             .der_length = pub_key->data_size
         };
-        ret = libp2p_crypto_rsa_verify(&rsa_pub, to_verify, NOISE_SIG_PREFIX_LEN + data_len, sig);
+        ret = libp2p_crypto_rsa_verify(&rsa_pub, data, data_len, sig);
     } else if (pub_key->type == KEYTYPE_ED25519) {
         ret = libp2p_crypto_verify_ed25519(pub_key->data, pub_key->data_size,
-                                           to_verify, NOISE_SIG_PREFIX_LEN + data_len,
-                                           sig, sig_len);
+                                           data, data_len, sig, sig_len);
     }
 
-    free(to_verify);
     libp2p_crypto_public_key_free(pub_key);
+    return ret;
+}
+
+static int noise_cb_verify(const uint8_t *identity_key, size_t identity_key_len,
+                           const uint8_t *data, size_t data_len,
+                           const uint8_t *sig, size_t sig_len) {
+    unsigned char *to_verify = (unsigned char *)malloc(NOISE_SIG_PREFIX_LEN + data_len);
+    if (!to_verify)
+        return 0;
+    memcpy(to_verify, NOISE_SIG_PREFIX, NOISE_SIG_PREFIX_LEN);
+    memcpy(to_verify + NOISE_SIG_PREFIX_LEN, data, data_len);
+
+    int ret = noise_cb_verify_raw(identity_key, identity_key_len,
+                                  to_verify, NOISE_SIG_PREFIX_LEN + data_len, sig, sig_len);
+    free(to_verify);
     return ret;
 }
 
@@ -108,4 +116,6 @@ void libp2p_noise_identity_callbacks_init(noise_identity_callbacks_t *callbacks)
     callbacks->sign = noise_cb_sign;
     callbacks->verify = noise_cb_verify;
     callbacks->free_buffer = noise_cb_free_buffer;
+    callbacks->sign_raw = noise_cb_sign_raw;
+    callbacks->verify_raw = noise_cb_verify_raw;
 }
