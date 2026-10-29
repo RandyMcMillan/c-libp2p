@@ -469,6 +469,14 @@ struct Libp2pV2Stream* libp2p_net_quic_dial(const char *ip_address, uint16_t por
 
     struct lsquic_engine_settings settings;
     lsquic_engine_init_settings(&settings, 0);
+    /* Match the listener settings so the peer can open bidirectional Identify
+     * streams and send data on them.  Disable lsquic's TIMESTAMP extension
+     * frames: they are not part of RFC 9000 and quic-go closes the connection
+     * with "unknown frame type" when it sees them. */
+    settings.es_init_max_streams_bidi = 100;
+    settings.es_init_max_stream_data_bidi_local = 1 * 1024 * 1024;
+    settings.es_init_max_stream_data_bidi_remote = 1 * 1024 * 1024;
+    settings.es_timestamps = 0;
     api.ea_settings = &settings;
 
     dial->engine = lsquic_engine_new(0, &api);
