@@ -346,6 +346,8 @@ static void quic_stream_close(struct Libp2pV2Stream *stream)
             (sc->dial->outbound_stream == sc->ls_stream ||
              sc->dial->inbound_stream == sc->ls_stream))
             lsquic_stream_close(sc->ls_stream);
+        if (sc->dial && sc->dial->engine)
+            lsquic_engine_process_conns(sc->dial->engine);
         if (sc->dial && sc->owns_dial) {
             if (sc->dial->conn)
                 lsquic_conn_close(sc->dial->conn);

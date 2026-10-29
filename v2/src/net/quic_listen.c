@@ -302,6 +302,8 @@ static void quic_listen_stream_close(struct Libp2pV2Stream *stream)
     if (sc) {
         if (sc->ls_stream)
             lsquic_stream_close(sc->ls_stream);
+        if (sc->listener && sc->listener->engine)
+            lsquic_engine_process_conns(sc->listener->engine);
         if (sc->conn) {
             sc->conn->stream_ready = 0;
             quic_listen_conn_release(sc->conn);
