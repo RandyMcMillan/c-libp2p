@@ -3,8 +3,9 @@ CFLAGS = -Wall -Wextra -std=c99 -D_DEFAULT_SOURCE -I include -I ../include -I ..
 LDFLAGS =
 
 ifdef HAS_LSQUIC
-CFLAGS += -DHAS_LSQUIC -I ../../boringssl/include
-LDFLAGS += ../../boringssl/build-c-ipfs/libcrypto.a ../../boringssl/build-c-ipfs/libssl.a
+CFLAGS += -DHAS_LSQUIC -I ../../boringssl/include -I ../../lsquic/include
+LDFLAGS += ../../lsquic/build-c-ipfs/src/liblsquic/liblsquic.a \
+           ../../boringssl/build-c-ipfs/libcrypto.a ../../boringssl/build-c-ipfs/libssl.a
 else
 ifeq ($(shell uname -s),Darwin)
 CFLAGS += -I /opt/homebrew/opt/openssl/include
@@ -35,6 +36,11 @@ SRCS = src/net/multiaddr.c \
        src/identify/identify_v2_ipfs.c \
        src/swarm/swarm.c \
        src/utils/logger.c
+
+ifdef HAS_LSQUIC
+SRCS += src/conn/tls.c \
+        src/net/quic_dial.c
+endif
 
 OBJS = $(SRCS:.c=.o)
 
