@@ -219,6 +219,17 @@ int libp2p_conn_dialer_join_swarm(const struct Dialer* dialer, struct Libp2pPeer
 			peer->sessionContext->default_stream = conn_stream;
 			peer->sessionContext->port = multiaddress_get_ip_port(ma);
 			multiaddress_get_ip_address(ma, &peer->sessionContext->host);
+			/* Noise sessions never populate remote_peer_id (only SECIO does);
+			 * higher layers such as Bitswap need it to attribute inbound
+			 * messages to the right peer. */
+			if (peer->sessionContext->remote_peer_id == NULL && peer->id != NULL && peer->id_size > 0) {
+				peer->sessionContext->remote_peer_id = (char*) malloc(peer->id_size + 1);
+				if (peer->sessionContext->remote_peer_id != NULL) {
+					memcpy(peer->sessionContext->remote_peer_id, peer->id, peer->id_size);
+					peer->sessionContext->remote_peer_id[peer->id_size] = '\0';
+					DBG_SCOPE("dialer", "session remote_peer_id=%s\n", peer->sessionContext->remote_peer_id);
+				}
+			}
 			break;
 		}
 		current_entry = current_entry->next;
