@@ -175,7 +175,10 @@ int libp2p_swarm_add_connection(struct SwarmContext* context, int file_descripto
 struct SwarmContext* libp2p_swarm_new(struct Libp2pVector* protocol_handlers, struct Datastore* datastore, struct Filestore* filestore) {
 	struct SwarmContext* context = (struct SwarmContext*) malloc(sizeof(struct SwarmContext));
 	if (context != NULL) {
-		context->thread_pool = thpool_init(1);
+		/* Each connection's listener loops until the connection closes, so the
+		 * pool needs a thread per concurrent connection; a single thread starves
+		 * every connection after the first (e.g. a reconnect to the same peer). */
+		context->thread_pool = thpool_init(25);
 		context->protocol_handlers = protocol_handlers;
 		context->datastore = datastore;
 		context->filestore = filestore;
