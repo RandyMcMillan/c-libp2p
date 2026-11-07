@@ -103,25 +103,26 @@ static int quic_packets_out(void *ctx, const struct lsquic_out_spec *specs,
 {
     struct quic_dial_ctx *dial = (struct quic_dial_ctx *)ctx;
     int total = 0;
+    /* Each spec is one UDP datagram; its iovecs (coalesced packets) must be
+     * sent together, and the return value counts specs, not iovecs. */
     for (unsigned i = 0; i < n_packets_out; i++) {
         const struct lsquic_out_spec *spec = &specs[i];
-        for (size_t j = 0; j < spec->iovlen; j++) {
-            ssize_t n = sendto(dial->udp_fd,
-                               spec->iov[j].iov_base,
-                               spec->iov[j].iov_len,
-                               0,
-                               spec->dest_sa,
-                               (spec->dest_sa->sa_family == AF_INET)
-                                   ? sizeof(struct sockaddr_in)
-                                   : sizeof(struct sockaddr_in6));
-            if (n < 0) {
-                if (errno == EAGAIN || errno == EWOULDBLOCK)
-                    return total;
-                libp2p_v2_logger_error("quic", "sendto failed: %s\n", strerror(errno));
-                return -1;
-            }
-            total++;
+        struct msghdr msg;
+        memset(&msg, 0, sizeof(msg));
+        msg.msg_name = (void *)spec->dest_sa;
+        msg.msg_namelen = (spec->dest_sa->sa_family == AF_INET)
+                              ? sizeof(struct sockaddr_in)
+                              : sizeof(struct sockaddr_in6);
+        msg.msg_iov = spec->iov;
+        msg.msg_iovlen = spec->iovlen;
+        ssize_t n = sendmsg(dial->udp_fd, &msg, 0);
+        if (n < 0) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK)
+                return total;
+            libp2p_v2_logger_error("quic", "sendmsg failed: %s\n", strerror(errno));
+            return -1;
         }
+        total++;
     }
     return total;
 }
